@@ -138,7 +138,8 @@ impl Config {
     pub fn load() -> Self {
         let path = config_path();
         let mut cfg = match fs::read_to_string(&path) {
-            Ok(text) => match serde_json::from_str::<Config>(&text) {
+            // Editoren wie Notepad schreiben ein BOM, das serde_json nicht akzeptiert.
+            Ok(text) => match serde_json::from_str::<Config>(text.trim_start_matches('\u{feff}')) {
                 Ok(c) => c,
                 Err(e) => {
                     log::error!("config.json ist ungueltig, Standardwerte werden genutzt: {e}");

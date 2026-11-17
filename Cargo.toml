@@ -1,7 +1,8 @@
 [package]
 name = "deuclip"
-version = "1.0.0"
+version = "1.1.0"
 edition = "2021"
+build = "build.rs"
 description = "Instant-Replay-Clip-Tool fuer Windows, geschrieben in Rust"
 license = "MIT"
 repository = "https://github.com/EmilDeuOfficial/DeuClip"
@@ -29,6 +30,9 @@ windows = { version = "0.62", features = [
     "Win32_System_JobObjects",
     "Win32_UI_Input_KeyboardAndMouse",
 ] }
+
+[build-dependencies]
+winresource = "0.1"
 
 [profile.release]
 opt-level = 3

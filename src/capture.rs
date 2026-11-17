@@ -161,6 +161,17 @@ pub fn find_ffmpeg(configured: &str) -> Option<PathBuf> {
             }
         }
     }
+    // Per winget installiertes FFmpeg, falls der PATH noch nicht aktualisiert wurde.
+    if let Some(local) = std::env::var_os("LOCALAPPDATA") {
+        let p = PathBuf::from(local)
+            .join("Microsoft")
+            .join("WinGet")
+            .join("Links")
+            .join("ffmpeg.exe");
+        if p.is_file() {
+            return Some(p);
+        }
+    }
     None
 }
 
@@ -446,7 +457,7 @@ fn build_args(s: &Settings, cand: Candidate, dir: &Path) -> Vec<String> {
     match cand.enc {
         Enc::Nvenc => push(&[
             "-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", &q, "-b:v", "0",
-            "-maxrate", "60M", "-bufsize", "120M",
+            "-maxrate", "100M", "-bufsize", "200M",
         ]),
         Enc::Qsv => push(&[
             "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", &q,

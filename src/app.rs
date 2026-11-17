@@ -186,11 +186,23 @@ impl DeuClipApp {
     fn restart_capture(&mut self) {
         match &self.ffmpeg {
             Some(path) => {
+                // Nie hochskalieren: ab der nativen Höhe des Monitors wird nicht skaliert.
+                let native = self
+                    .monitors
+                    .iter()
+                    .find(|m| m.index == self.cfg.monitor_index)
+                    .map(|m| m.height)
+                    .unwrap_or(0);
+                let scale_height = if native > 0 && self.cfg.scale_height as i32 >= native {
+                    0
+                } else {
+                    self.cfg.scale_height
+                };
                 self.engine.send(Command::Start(Settings {
                     ffmpeg: path.clone(),
                     monitor_index: self.cfg.monitor_index,
                     fps: self.cfg.fps,
-                    scale_height: self.cfg.scale_height,
+                    scale_height,
                     quality: self.cfg.quality,
                 }));
             }
@@ -533,6 +545,7 @@ impl DeuClipApp {
                     ui.label("Clip-Auflösung");
                     let mut scale_options: Vec<(u32, String)> = vec![
                         (0, "Wie Bildschirm (keine Skalierung)".to_string()),
+                        (2160, "2160p (4K)".to_string()),
                         (1440, "1440p (QHD)".to_string()),
                         (1080, "1080p (Full HD)".to_string()),
                         (720, "720p (HD)".to_string()),
@@ -568,7 +581,7 @@ impl DeuClipApp {
                     ui.end_row();
                 });
             ui.label(Self::dim(
-                "Kleinere Clip-Auflösung spart Speicherplatz und Last, ist aber unschärfer. Änderungen starten die Aufnahme neu.",
+                "Kleinere Clip-Auflösung spart Speicherplatz und Last. 4K nimmt nur bei einem 4K-Bildschirm in voller Größe auf, es wird nie hochskaliert. Änderungen starten die Aufnahme neu.",
             ));
         });
         changed
