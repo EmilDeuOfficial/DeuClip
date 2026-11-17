@@ -1,7 +1,13 @@
 ﻿#define MyAppName "DeuClip"
 ; Read from the version resource of the EXE (version in Cargo.toml).
-#define MyAppVersion GetStringFileInfo(AddBackslash(SourcePath) + "dist\DeuClip.exe", "ProductVersion")
-#if MyAppVersion == ""
+#define MyAppVersionFull GetStringFileInfo(AddBackslash(SourcePath) + "dist\DeuClip.exe", "ProductVersion")
+; Shown as 1.0 instead of 1.0.0
+#if Copy(MyAppVersionFull, Len(MyAppVersionFull) - 1, 2) == ".0"
+  #define MyAppVersion Copy(MyAppVersionFull, 1, Len(MyAppVersionFull) - 2)
+#else
+  #define MyAppVersion MyAppVersionFull
+#endif
+#if MyAppVersionFull == ""
   #error dist\DeuClip.exe has no version resource, please build it with build.py
 #endif
 #define MyAppPublisher "EmilDeuOfficial"

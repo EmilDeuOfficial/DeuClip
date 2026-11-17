@@ -33,12 +33,21 @@ def app_version() -> str:
     return match.group(1)
 
 
+def short_version(version: str) -> str:
+    """1.0.0 -> 1.0, 1.2.0 -> 1.2, 1.2.3 stays (the form used in the README and the release tag)."""
+    parts = version.split(".")
+    while len(parts) > 2 and parts[-1] == "0":
+        parts.pop()
+    return ".".join(parts)
+
+
 def check_version(version: str) -> None:
     """The README badge must show the version that is being built."""
+    version = short_version(version)
     badge = re.search(r"badge/version-v([\w.]+)-", (ROOT / "README.md").read_text(encoding="utf-8"))
     if not badge or badge.group(1) != version:
         found = badge.group(1) if badge else "none"
-        print(f"[ERROR] README badge shows v{found}, Cargo.toml says {version}.")
+        print(f"[ERROR] README badge shows v{found}, Cargo.toml says v{version}.")
         sys.exit(1)
 
 
@@ -107,7 +116,7 @@ def main() -> None:
 
     version = app_version()
     check_version(version)
-    print(f"[*] Version {version} (release tag v{version})")
+    print(f"[*] Version {short_version(version)} (release tag v{short_version(version)})")
 
     build_exe()
     iscc = find_inno() or install_inno()

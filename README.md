@@ -1,6 +1,6 @@
 # DeuClip
 
-![Version](https://img.shields.io/badge/version-v1.1.0-22C55E)
+![Version](https://img.shields.io/badge/version-v1.0-22C55E)
 ![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-1C1C1C)
 ![Language](https://img.shields.io/badge/language-Rust-1C1C1C)
 ![License](https://img.shields.io/badge/license-MIT-22C55E)
@@ -132,20 +132,15 @@ Files created at runtime:
 
 ## Changelog
 
-### v1.1.0
-
-- New clip resolution 2160p (4K), never upscales
-- Installer `DeuClip_Setup.exe` (Inno Setup, German and English) that downloads FFmpeg when needed
-- `build.py` builds the EXE and the installer, icon and version information are embedded in the EXE
-- Monitor display name, clearer resolution names, Segoe UI as font, labels can no longer be selected
-
-### v1.0.0
+### v1.0
 
 - Two global hotkeys with their own clip length and key recording in the GUI
 - Rolling segment buffer via FFmpeg and `ddagrab`, hardware encoders with fallback to `libx264`
 - Clip creation without re-encoding, notice when the buffer is incomplete
-- Monitor selection, output folder, quality, frame rate and scaling are configurable
+- Monitor selection with monitor names, output folder, quality, frame rate and clip resolution up to 2160p (4K), never upscaled
 - Windows notifications, autostart, configuration and log file
+- Installer `DeuClip_Setup.exe` (Inno Setup, German and English) that downloads FFmpeg when needed
+- `build.py` builds the EXE and the installer, icon and version information are embedded in the EXE
 - Dark design with a green accent
 
 ## License
