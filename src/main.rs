@@ -8,6 +8,7 @@ mod hotkeys;
 mod instance;
 mod logging;
 mod notify;
+mod overlay;
 mod theme;
 mod tray;
 

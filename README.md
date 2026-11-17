@@ -15,6 +15,7 @@ DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of you
 - Screen selection in a dropdown with monitor name, resolution and a primary monitor marker, the capture restarts on change
 - Output folder via the native folder dialog, default is `Videos\Clips`, created when needed
 - Windows toast after saving ("Clip gespeichert" with the file name) and on errors
+- Small on-screen notification at the bottom left of the recorded monitor (green for saved, red for failed), it never takes focus and is excluded from screen capture, so it does not appear in clips
 - If the buffer is too short, everything available is saved and the notification says so
 - File name: `clip_YYYY-MM-DD_HH-MM-SS_<hotkey number>.mp4`
 - Capture via FFmpeg with `ddagrab` (Desktop Duplication), no screenshot loops in Rust
@@ -121,6 +122,7 @@ DeuClip/
     ├── hotkeys.rs          Global hotkeys
     ├── config.rs           config.json
     ├── notify.rs           Windows toasts
+    ├── overlay.rs          On-screen notification at the bottom left
     ├── autostart.rs        Autostart via the registry
     ├── tray.rs             Tray icon and menu
     ├── instance.rs         Single instance, shows the window on a second start

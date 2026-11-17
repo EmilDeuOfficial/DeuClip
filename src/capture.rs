@@ -46,6 +46,9 @@ const STARTUP_CHECK: Duration = Duration::from_millis(2200);
 pub struct MonitorInfo {
     /// Output index (output_idx for ddagrab).
     pub index: u32,
+    /// Top left corner on the virtual desktop.
+    pub x: i32,
+    pub y: i32,
     /// Windows name, e.g. \\.\DISPLAY1
     pub name: String,
     /// Monitor name from EDID, e.g. "LG ULTRAGEAR". May be empty.
@@ -218,6 +221,8 @@ pub fn list_monitors() -> Vec<MonitorInfo> {
                         .unwrap_or_default();
                     result.push(MonitorInfo {
                         index: i,
+                        x: r.left,
+                        y: r.top,
                         friendly,
                         name,
                         width: r.right - r.left,
@@ -292,6 +297,8 @@ fn friendly_names() -> Vec<(String, String)> {
 fn fallback_monitors() -> Vec<MonitorInfo> {
     vec![MonitorInfo {
         index: 0,
+        x: 0,
+        y: 0,
         name: "DISPLAY1".to_string(),
         friendly: String::new(),
         width: 0,

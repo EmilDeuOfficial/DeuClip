@@ -5,7 +5,7 @@ use crate::config::{Config, HotkeySpec, Quality, MAX_DURATION, MIN_DURATION};
 use crate::hotkeys::{self, HotkeyService};
 use crate::instance::Instance;
 use crate::tray::{Tray, TrayAction};
-use crate::{autostart, notify, theme};
+use crate::{autostart, notify, overlay, theme};
 use eframe::egui::{
     self, vec2, Align, Button, CornerRadius, Frame, Label, Layout, Margin, RichText, Stroke,
     TextEdit,
@@ -54,6 +54,7 @@ pub struct DeuClipApp {
 impl DeuClipApp {
     pub fn new(cc: &eframe::CreationContext<'_>, instance: Instance, background: bool) -> Self {
         theme::apply(&cc.egui_ctx);
+        overlay::init();
 
         let mut cfg = Config::load();
         let monitors = capture::list_monitors();
@@ -89,8 +90,17 @@ impl DeuClipApp {
                                 .map(|n| n.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| path.to_string_lossy().into_owned());
                             notify::clip_saved(&name, *partial, *got_secs, *wanted_secs);
+                            let detail = if *partial {
+                                format!("{name} ({got_secs} s von {wanted_secs} s)")
+                            } else {
+                                name
+                            };
+                            overlay::show(true, "Clip gespeichert", &detail);
                         }
-                        Event::SaveFailed { message, .. } => notify::error(message),
+                        Event::SaveFailed { message, .. } => {
+                            notify::error(message);
+                            overlay::show(false, "Clip nicht gespeichert", message);
+                        }
                         Event::State(RecState::Error(message)) => notify::error(message),
                         Event::State(_) => {}
                     }
@@ -208,6 +218,11 @@ impl DeuClipApp {
             output_dir: self.cfg.output_path(),
             retention_secs: retention,
         });
+
+        // The on-screen notification appears on the recorded monitor.
+        if let Some(m) = self.monitors.iter().find(|m| m.index == self.cfg.monitor_index) {
+            overlay::set_anchor(m.x + m.width / 2, m.y + m.height / 2);
+        }
 
         self.ffmpeg = capture::find_ffmpeg(&self.cfg.ffmpeg_path);
         let key: CaptureKey = (
