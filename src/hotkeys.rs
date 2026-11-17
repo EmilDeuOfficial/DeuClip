@@ -1,4 +1,4 @@
-//! Globale Hotkeys: Registrierung, Tastenzuordnung und Listener-Thread.
+//! Global hotkeys: registration, key mapping and the listener thread.
 
 use crate::capture::Command;
 use crate::config::HotkeySpec;
@@ -18,7 +18,7 @@ macro_rules! key_map {
     };
 }
 
-/// Ordnet eine egui-Taste dem Hotkey-Code zu.
+/// Maps an egui key to the hotkey code.
 pub fn code_for(key: Key) -> Option<Code> {
     key_map!(key;
         A => KeyA, B => KeyB, C => KeyC, D => KeyD, E => KeyE, F => KeyF, G => KeyG,
@@ -42,7 +42,7 @@ pub fn code_for(key: Key) -> Option<Code> {
     )
 }
 
-/// Lesbarer Tastenname fuer die Anzeige.
+/// Readable key name for display.
 pub fn key_label(name: &str) -> String {
     match name {
         "Num0" => "0".into(),
@@ -59,7 +59,7 @@ pub fn key_label(name: &str) -> String {
     }
 }
 
-/// Wandelt die gespeicherte Kombination in einen registrierbaren Hotkey.
+/// Converts the stored combination into a registrable hotkey.
 pub fn to_hotkey(spec: &HotkeySpec) -> Option<HotKey> {
     let key = Key::from_name(&spec.key)?;
     let code = code_for(key)?;
@@ -80,8 +80,8 @@ pub fn to_hotkey(spec: &HotkeySpec) -> Option<HotKey> {
     Some(HotKey::new(mods, code))
 }
 
-/// Prueft per Win32, ob eine Windows-Taste gerade gedrueckt ist.
-/// egui meldet die Win-Taste nicht als Modifier.
+/// Checks via Win32 whether a Windows key is currently pressed.
+/// egui does not report the Win key as a modifier.
 pub fn win_key_down() -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_LWIN, VK_RWIN};
     unsafe {
@@ -103,7 +103,7 @@ pub struct HotkeyService {
 }
 
 impl HotkeyService {
-    /// Muss im Hauptthread (mit Nachrichtenschleife) erzeugt werden.
+    /// Must be created on the main thread (which runs the message loop).
     pub fn new(commands: Sender<Command>, durations: [u32; 2]) -> Self {
         let shared = Arc::new(Shared {
             ids: Mutex::new([None, None]),
@@ -113,7 +113,7 @@ impl HotkeyService {
         let (manager, init_error) = match GlobalHotKeyManager::new() {
             Ok(m) => (Some(m), None),
             Err(e) => {
-                log::error!("Hotkey-Manager konnte nicht erstellt werden: {e}");
+                log::error!("Could not create the hotkey manager: {e}");
                 (
                     None,
                     Some(format!("Globale Hotkeys sind nicht verfuegbar: {e}")),
@@ -126,7 +126,7 @@ impl HotkeyService {
             .name("deuclip-hotkeys".into())
             .spawn(move || listener(thread_shared, commands));
         if let Err(e) = spawned {
-            log::error!("Hotkey-Thread konnte nicht gestartet werden: {e}");
+            log::error!("Could not start the hotkey thread: {e}");
         }
 
         Self {
@@ -143,7 +143,7 @@ impl HotkeyService {
         }
     }
 
-    /// Registriert den Hotkey eines Slots neu. Fehler sind fuer die Anzeige formuliert.
+    /// Registers the hotkey of a slot again. Errors are worded for display.
     pub fn set_slot(&mut self, slot: usize, spec: &HotkeySpec) -> Result<(), String> {
         self.clear_slot(slot);
         let Some(manager) = self.manager.as_ref() else {
@@ -161,11 +161,11 @@ impl HotkeyService {
                 if let Ok(mut ids) = self.shared.ids.lock() {
                     ids[slot] = Some(hotkey.id());
                 }
-                log::info!("Hotkey {} registriert: {}", slot + 1, spec.label());
+                log::info!("Hotkey {} registered: {}", slot + 1, spec.label());
                 Ok(())
             }
             Err(e) => {
-                log::warn!("Hotkey {} ({}) nicht registrierbar: {e}", slot + 1, spec.label());
+                log::warn!("Hotkey {} ({}) could not be registered: {e}", slot + 1, spec.label());
                 Err(format!(
                     "{} konnte nicht registriert werden. Vermutlich ist sie von einer anderen Anwendung belegt. ({e})",
                     spec.label()
@@ -178,7 +178,7 @@ impl HotkeyService {
         if let Some(old) = self.registered[slot].take() {
             if let Some(manager) = self.manager.as_ref() {
                 if let Err(e) = manager.unregister(old) {
-                    log::warn!("Hotkey {} konnte nicht freigegeben werden: {e}", slot + 1);
+                    log::warn!("Hotkey {} could not be released: {e}", slot + 1);
                 }
             }
         }
@@ -187,7 +187,7 @@ impl HotkeyService {
         }
     }
 
-    /// Gibt beide Hotkeys frei (z.B. waehrend der Aufnahme einer neuen Kombination).
+    /// Releases both hotkeys (e.g. while recording a new combination).
     pub fn suspend(&mut self) {
         self.clear_slot(0);
         self.clear_slot(1);
@@ -206,7 +206,7 @@ fn listener(shared: Arc<Shared>, commands: Sender<Command>) {
             Err(_) => None,
         };
         let Some(slot) = slot else { continue };
-        // Tastenwiederholung beim Halten ignorieren.
+        // Ignore key repeat while the key is held.
         if let Some(t) = last[slot] {
             if t.elapsed() < Duration::from_millis(1500) {
                 continue;
@@ -214,7 +214,7 @@ fn listener(shared: Arc<Shared>, commands: Sender<Command>) {
         }
         last[slot] = Some(Instant::now());
         let duration = shared.durations.lock().map(|d| d[slot]).unwrap_or(30);
-        log::info!("Hotkey {} ausgeloest ({} s)", slot + 1, duration);
+        log::info!("Hotkey {} triggered ({} s)", slot + 1, duration);
         if commands.send(Command::Save { slot, duration }).is_err() {
             break;
         }

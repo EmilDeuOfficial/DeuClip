@@ -1,8 +1,8 @@
-//! Aufnahme-Engine: FFmpeg als Kindprozess (ddagrab), Segmentpuffer und Clip-Erzeugung.
+//! Capture engine: FFmpeg as a child process (ddagrab), segment buffer and clip creation.
 //!
-//! FFmpeg schreibt fortlaufend Segmente von ca. 1 Sekunde (MPEG-TS) in einen temporaeren
-//! Ordner. Beim Hotkey werden die letzten Segmente per Concat-Demuxer ohne Neukodierung
-//! zu einer MP4 zusammengefuegt.
+//! FFmpeg continuously writes segments of about 1 second (MPEG-TS) into a temporary
+//! folder. On a hotkey the latest segments are joined into an MP4 with the concat
+//! demuxer, without re-encoding.
 
 use crate::config::Quality;
 use std::collections::VecDeque;
@@ -34,21 +34,21 @@ use windows::Win32::System::JobObjects::{
 };
 
 const CREATE_NO_WINDOW: u32 = 0x0800_0000;
-/// Zusaetzliche Aufbewahrungszeit der Segmente in Sekunden.
+/// Extra retention time of the segments in seconds.
 pub const RESERVE_SECS: u64 = 10;
 const STARTUP_CHECK: Duration = Duration::from_millis(2200);
 
 // ---------------------------------------------------------------------------
-// Oeffentliche Typen
+// Public types
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Debug)]
 pub struct MonitorInfo {
-    /// Ausgabeindex (output_idx fuer ddagrab).
+    /// Output index (output_idx for ddagrab).
     pub index: u32,
-    /// Windows-Name, z.B. \\.\DISPLAY1
+    /// Windows name, e.g. \\.\DISPLAY1
     pub name: String,
-    /// Name des Monitors laut EDID, z.B. "LG ULTRAGEAR". Kann leer sein.
+    /// Monitor name from EDID, e.g. "LG ULTRAGEAR". May be empty.
     pub friendly: String,
     pub width: i32,
     pub height: i32,
@@ -56,7 +56,7 @@ pub struct MonitorInfo {
 }
 
 impl MonitorInfo {
-    /// Anzeigename: Herstellername des Monitors, sonst Windows-Anzeigename.
+    /// Display name: the monitor's own name, otherwise the Windows display name.
     pub fn short_name(&self) -> String {
         if self.friendly.trim().is_empty() {
             self.name.trim_start_matches(r"\\.\").to_string()
@@ -92,10 +92,10 @@ pub enum RecState {
 }
 
 pub enum Command {
-    /// Aufnahme (neu) starten.
+    /// Start (or restart) the capture.
     Start(Settings),
     Stop,
-    /// Ausgabeordner und Aufbewahrungsdauer aktualisieren.
+    /// Update the output folder and the retention time.
     Configure {
         output_dir: PathBuf,
         retention_secs: u64,
@@ -123,7 +123,7 @@ pub enum Event {
 }
 
 // ---------------------------------------------------------------------------
-// Hilfsfunktionen
+// Helpers
 // ---------------------------------------------------------------------------
 
 fn proc(path: &Path) -> Proc {
@@ -132,7 +132,7 @@ fn proc(path: &Path) -> Proc {
     c
 }
 
-/// Sucht ffmpeg.exe: konfigurierter Pfad, neben der EXE, dann PATH.
+/// Finds ffmpeg.exe: configured path, next to the EXE, then PATH.
 pub fn find_ffmpeg(configured: &str) -> Option<PathBuf> {
     let configured = configured.trim();
     if !configured.is_empty() {
@@ -161,7 +161,7 @@ pub fn find_ffmpeg(configured: &str) -> Option<PathBuf> {
             }
         }
     }
-    // Per winget installiertes FFmpeg, falls der PATH noch nicht aktualisiert wurde.
+    // FFmpeg installed via winget, in case the PATH has not been refreshed yet.
     if let Some(local) = std::env::var_os("LOCALAPPDATA") {
         let p = PathBuf::from(local)
             .join("Microsoft")
@@ -175,7 +175,7 @@ pub fn find_ffmpeg(configured: &str) -> Option<PathBuf> {
     None
 }
 
-/// Listet die Monitore des ersten Grafikadapters (Reihenfolge wie bei ddagrab).
+/// Lists the monitors of the first graphics adapter (same order as ddagrab).
 pub fn list_monitors() -> Vec<MonitorInfo> {
     let mut result = Vec::new();
     let names = friendly_names();
@@ -183,14 +183,14 @@ pub fn list_monitors() -> Vec<MonitorInfo> {
         let factory: IDXGIFactory1 = match CreateDXGIFactory1() {
             Ok(f) => f,
             Err(e) => {
-                log::error!("DXGI-Factory nicht verfuegbar: {e}");
+                log::error!("DXGI factory not available: {e}");
                 return fallback_monitors();
             }
         };
         let adapter = match factory.EnumAdapters1(0) {
             Ok(a) => a,
             Err(e) => {
-                log::error!("Kein Grafikadapter gefunden: {e}");
+                log::error!("No graphics adapter found: {e}");
                 return fallback_monitors();
             }
         };
@@ -240,7 +240,7 @@ fn wide_to_string(buf: &[u16]) -> String {
     String::from_utf16_lossy(&buf[..len])
 }
 
-/// Liefert Paare aus Windows-Anzeigename (\\.\DISPLAY1) und Monitor-Herstellername.
+/// Returns pairs of Windows display name (\\.\DISPLAY1) and monitor name.
 fn friendly_names() -> Vec<(String, String)> {
     let mut out = Vec::new();
     unsafe {
@@ -329,7 +329,7 @@ fn probe(ffmpeg: &Path) -> Probe {
 }
 
 // ---------------------------------------------------------------------------
-// Job-Objekt: FFmpeg wird beendet, falls DeuClip abstuerzt
+// Job object: FFmpeg is terminated if DeuClip crashes
 // ---------------------------------------------------------------------------
 
 struct Job(HANDLE);
@@ -366,13 +366,13 @@ fn assign_to_job(job: &Job, child: &Child) {
     unsafe {
         let h = HANDLE(child.as_raw_handle());
         if let Err(e) = AssignProcessToJobObject(job.0, h) {
-            log::warn!("FFmpeg konnte dem Job-Objekt nicht zugewiesen werden: {e}");
+            log::warn!("Could not assign FFmpeg to the job object: {e}");
         }
     }
 }
 
 // ---------------------------------------------------------------------------
-// FFmpeg-Aufruf
+// FFmpeg invocation
 // ---------------------------------------------------------------------------
 
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
@@ -397,7 +397,7 @@ impl Enc {
 #[derive(Clone, Copy)]
 struct Candidate {
     enc: Enc,
-    /// true: Frames bleiben auf der GPU (nur ohne Skalierung).
+    /// true: frames stay on the GPU (only without scaling).
     direct: bool,
 }
 
@@ -481,7 +481,7 @@ fn build_args(s: &Settings, cand: Candidate, dir: &Path) -> Vec<String> {
 }
 
 // ---------------------------------------------------------------------------
-// Aufnahme-Prozess
+// Capture process
 // ---------------------------------------------------------------------------
 
 struct Recorder {
@@ -499,7 +499,7 @@ impl Recorder {
         tail_text(&self.tail)
     }
 
-    /// Beendet FFmpeg sauber ("q") und entfernt den Puffer.
+    /// Stops FFmpeg cleanly ("q") and removes the buffer.
     fn stop(mut self) {
         if let Some(mut stdin) = self.stdin.take() {
             let _ = stdin.write_all(b"q\n");
@@ -574,7 +574,7 @@ fn temp_root() -> PathBuf {
     std::env::temp_dir().join("DeuClip")
 }
 
-/// Alle fertigen Segmente, aufsteigend. Das neueste (in Arbeit) ist nicht enthalten.
+/// All finished segments in ascending order. The newest one (still being written) is excluded.
 fn finished_segments(dir: &Path) -> Vec<PathBuf> {
     let mut files = all_segments(dir);
     files.pop();
@@ -600,7 +600,7 @@ fn all_segments(dir: &Path) -> Vec<PathBuf> {
 }
 
 // ---------------------------------------------------------------------------
-// Clip speichern
+// Saving clips
 // ---------------------------------------------------------------------------
 
 struct SavedClip {
@@ -675,7 +675,7 @@ fn save_clip(
 }
 
 // ---------------------------------------------------------------------------
-// Engine-Thread
+// Engine thread
 // ---------------------------------------------------------------------------
 
 pub struct Engine {
@@ -710,11 +710,11 @@ impl Engine {
 
     pub fn send(&self, cmd: Command) {
         if self.tx.send(cmd).is_err() {
-            log::error!("Capture-Thread ist nicht mehr erreichbar");
+            log::error!("Capture thread is no longer reachable");
         }
     }
 
-    /// Beendet FFmpeg und wartet auf den Thread.
+    /// Stops FFmpeg and waits for the thread.
     pub fn shutdown(&mut self) {
         let _ = self.tx.send(Command::Shutdown);
         if let Some(h) = self.handle.take() {
@@ -743,7 +743,7 @@ impl Manager {
     }
 
     fn run(&mut self) {
-        // Reste frueherer Laeufe entfernen.
+        // Remove leftovers of earlier runs.
         let _ = fs::remove_dir_all(temp_root());
         let mut ticks = 0u32;
         loop {
@@ -807,12 +807,12 @@ impl Manager {
         let mut last_error = String::from("Kein Encoder konnte gestartet werden.");
         for cand in candidates(&probe, s.scale_height > 0) {
             let label = if cand.direct {
-                format!("{} (GPU direkt)", cand.enc.name())
+                format!("{} (GPU direct)", cand.enc.name())
             } else {
                 cand.enc.name().to_string()
             };
             let args = build_args(&s, cand, &dir);
-            log::info!("Starte FFmpeg mit {label}");
+            log::info!("Starting FFmpeg with {label}");
             let mut rec = match spawn_ffmpeg(&s.ffmpeg, &args, &dir, &label) {
                 Ok(r) => r,
                 Err(e) => {
@@ -828,7 +828,7 @@ impl Manager {
             let mut exited = false;
             while Instant::now() < deadline {
                 if let Ok(Some(status)) = rec.child.try_wait() {
-                    log::warn!("FFmpeg mit {label} beendet sich sofort: {status}");
+                    log::warn!("FFmpeg with {label} exits immediately: {status}");
                     exited = true;
                     break;
                 }
@@ -847,7 +847,7 @@ impl Manager {
                 }
                 continue;
             }
-            log::info!("Aufnahme laeuft mit {label}");
+            log::info!("Capture running with {label}");
             let enc = rec.encoder.clone();
             self.rec = Some(rec);
             self.state(RecState::Running { encoder: enc });
@@ -875,7 +875,7 @@ impl Manager {
                     {
                         rec.empty_warned = true;
                         let tail = rec.tail_text();
-                        log::error!("FFmpeg laeuft, schreibt aber keine Segmente. {tail}");
+                        log::error!("FFmpeg is running but writes no segments. {tail}");
                         failure = Some(format!("FFmpeg liefert keine Daten. {tail}"));
                     }
                 }
@@ -889,7 +889,7 @@ impl Manager {
             return;
         }
 
-        // Alte Segmente alle 2 Sekunden aufraeumen.
+        // Clean up old segments every 2 seconds.
         if ticks % 4 == 0 {
             if let Some(rec) = &self.rec {
                 let max_age = Duration::from_secs(self.retention_secs);
@@ -941,7 +941,7 @@ impl Manager {
                         });
                     }
                     Err(message) => {
-                        log::error!("Clip speichern fehlgeschlagen: {message}");
+                        log::error!("Saving the clip failed: {message}");
                         let _ = events.send(Event::SaveFailed { slot, message });
                     }
                 }

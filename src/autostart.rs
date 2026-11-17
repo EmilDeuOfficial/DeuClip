@@ -1,4 +1,4 @@
-//! Autostart ueber den Registry-Run-Key des aktuellen Benutzers.
+//! Autostart via the registry Run key of the current user.
 
 use winreg::enums::{HKEY_CURRENT_USER, KEY_SET_VALUE};
 use winreg::RegKey;
@@ -28,7 +28,7 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     } else {
         match key.delete_value(VALUE_NAME) {
             Ok(()) => Ok(()),
-            // Nicht vorhanden ist kein Fehler.
+            // A missing value is not an error.
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
             Err(e) => Err(format!("Autostart konnte nicht entfernt werden: {e}")),
         }

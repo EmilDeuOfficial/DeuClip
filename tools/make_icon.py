@@ -1,6 +1,6 @@
-"""Erzeugt img/app.ico und img/app-icon.svg (gruener Punkt auf dunklem Quadrat).
+"""Generates img/app.ico and img/app-icon.svg (green dot on a dark square).
 
-Aufruf: python tools/make_icon.py   (benoetigt Pillow)
+Usage: python tools/make_icon.py   (requires Pillow)
 """
 from pathlib import Path
 
@@ -37,7 +37,7 @@ def main() -> None:
         "</svg>\n"
     )
     (IMG / "app-icon.svg").write_text(svg, encoding="utf-8")
-    print("img/app.ico und img/app-icon.svg geschrieben")
+    print("Wrote img/app.ico and img/app-icon.svg")
 
 
 if __name__ == "__main__":

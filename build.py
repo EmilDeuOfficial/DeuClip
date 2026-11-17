@@ -1,10 +1,10 @@
 """
-Build-Skript: Rust-App -> EXE (cargo) -> Installer (Inno Setup)
-Aufruf: python build.py
+Build script: Rust app -> EXE (cargo) -> installer (Inno Setup)
+Usage: python build.py
 
-Ergebnis im Ordner dist/:
-  DeuClip.exe          einzelne EXE ohne Installer
-  DeuClip_Setup.exe    Installer (laedt bei Bedarf FFmpeg nach)
+Output in the dist/ folder:
+  DeuClip.exe          single EXE without an installer
+  DeuClip_Setup.exe    installer (downloads FFmpeg when needed)
 """
 import os
 import re
@@ -28,17 +28,17 @@ def app_version() -> str:
     text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
     match = re.search(r'^version = "([^"]+)"', text, re.M)
     if not match:
-        print("[ERROR] Version in Cargo.toml nicht gefunden.")
+        print("[ERROR] Version not found in Cargo.toml.")
         sys.exit(1)
     return match.group(1)
 
 
 def check_version(version: str) -> None:
-    """Das README-Badge muss die Version zeigen, die gebaut wird."""
+    """The README badge must show the version that is being built."""
     badge = re.search(r"badge/version-v([\w.]+)-", (ROOT / "README.md").read_text(encoding="utf-8"))
     if not badge or badge.group(1) != version:
-        found = badge.group(1) if badge else "keine"
-        print(f"[ERROR] README-Badge zeigt v{found}, Cargo.toml sagt {version}.")
+        found = badge.group(1) if badge else "none"
+        print(f"[ERROR] README badge shows v{found}, Cargo.toml says {version}.")
         sys.exit(1)
 
 
@@ -46,7 +46,7 @@ def run(cmd: list, **kwargs) -> None:
     print("\n>>> " + " ".join(str(c) for c in cmd) + "\n")
     result = subprocess.run(cmd, **kwargs)
     if result.returncode != 0:
-        print(f"[ERROR] Befehl fehlgeschlagen (Exit-Code {result.returncode})")
+        print(f"[ERROR] Command failed (exit code {result.returncode})")
         sys.exit(result.returncode)
 
 
@@ -58,45 +58,45 @@ def find_inno() -> str | None:
 
 
 def install_inno() -> str:
-    print("[*] Inno Setup nicht gefunden. Installation per winget ...")
+    print("[*] Inno Setup not found. Installing via winget ...")
     result = subprocess.run(
         ["winget", "install", "JRSoftware.InnoSetup",
          "--accept-source-agreements", "--accept-package-agreements"],
     )
     if result.returncode != 0:
-        print("[ERROR] Inno Setup konnte nicht automatisch installiert werden.")
-        print("        Bitte manuell installieren: https://jrsoftware.org/isdl.php")
+        print("[ERROR] Could not install Inno Setup automatically.")
+        print("        Please install it manually: https://jrsoftware.org/isdl.php")
         sys.exit(1)
     found = find_inno()
     if not found:
-        print("[ERROR] Inno Setup installiert, ISCC.exe aber nicht gefunden.")
-        print("        Das Skript in einem neuen Terminal erneut starten.")
+        print("[ERROR] Inno Setup installed, but ISCC.exe was not found.")
+        print("        Run the script again in a new terminal.")
         sys.exit(1)
     return found
 
 
 def build_exe() -> None:
-    print("[*] Baue EXE mit cargo ...")
+    print("[*] Building the EXE with cargo ...")
     run(["cargo", "build", "--release"], cwd=ROOT)
     if not CARGO_EXE.exists():
-        print("[ERROR] cargo-Ausgabe nicht gefunden.")
+        print("[ERROR] cargo output not found.")
         sys.exit(1)
     DIST.mkdir(exist_ok=True)
     target = DIST / "DeuClip.exe"
     shutil.copy2(CARGO_EXE, target)
-    print(f"[OK] DeuClip.exe gebaut ({target.stat().st_size / 1024 / 1024:.1f} MB)")
+    print(f"[OK] DeuClip.exe built ({target.stat().st_size / 1024 / 1024:.1f} MB)")
 
 
 def build_installer(iscc: str) -> None:
-    print("[*] Baue Installer mit Inno Setup ...")
+    print("[*] Building the installer with Inno Setup ...")
     run([iscc, str(ROOT / "installer.iss")], cwd=ROOT)
     installer = DIST / "DeuClip_Setup.exe"
     if not installer.exists():
-        print("[ERROR] Installer nach Inno Setup nicht gefunden.")
+        print("[ERROR] Installer not found after Inno Setup.")
         sys.exit(1)
     print("\n" + "=" * 60)
-    print(f"  Installer fertig: {installer}")
-    print(f"  Groesse: {installer.stat().st_size / 1024 / 1024:.1f} MB")
+    print(f"  Installer ready: {installer}")
+    print(f"  Size: {installer.stat().st_size / 1024 / 1024:.1f} MB")
     print("=" * 60 + "\n")
 
 
@@ -107,12 +107,12 @@ def main() -> None:
 
     version = app_version()
     check_version(version)
-    print(f"[*] Version {version} (Release-Tag v{version})")
+    print(f"[*] Version {version} (release tag v{version})")
 
     build_exe()
     iscc = find_inno() or install_inno()
     build_installer(iscc)
-    print("[DONE] Build abgeschlossen.")
+    print("[DONE] Build complete.")
 
 
 if __name__ == "__main__":

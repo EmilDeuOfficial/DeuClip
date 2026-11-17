@@ -1,5 +1,5 @@
-//! Bettet Icon und Versionsinformationen in die EXE ein.
-//! Der Installer liest die Version aus dieser Ressource (ProductVersion).
+//! Embeds the icon and version information into the EXE.
+//! The installer reads the version from this resource (ProductVersion).
 
 fn main() {
     println!("cargo:rerun-if-changed=img/app.ico");
@@ -14,8 +14,8 @@ fn main() {
         res.set("LegalCopyright", "Copyright (c) 2026 EmilDeuOfficial");
         res.set("OriginalFilename", "DeuClip.exe");
         if let Err(e) = res.compile() {
-            // Ein fehlender Resource-Compiler soll den Build nicht blockieren.
-            println!("cargo:warning=Ressourcen konnten nicht eingebettet werden: {e}");
+            // A missing resource compiler must not block the build.
+            println!("cargo:warning=Could not embed resources: {e}");
         }
     }
 }

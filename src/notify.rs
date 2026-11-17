@@ -1,4 +1,4 @@
-//! Windows-Toast-Benachrichtigungen. Jede Meldung laeuft in einem eigenen Thread.
+//! Windows toast notifications. Every notification runs in its own thread.
 
 use winrt_notification::Toast;
 
@@ -13,15 +13,15 @@ fn show(title: String, line1: String, line2: Option<String>) {
                 toast = toast.text2(l2);
             }
             if let Err(e) = toast.show() {
-                log::warn!("Benachrichtigung fehlgeschlagen: {e:?}");
+                log::warn!("Notification failed: {e:?}");
             }
         });
     if let Err(e) = spawned {
-        log::warn!("Benachrichtigungs-Thread konnte nicht gestartet werden: {e}");
+        log::warn!("Could not start the notification thread: {e}");
     }
 }
 
-/// Erfolgsmeldung. `partial` markiert einen unvollstaendigen Puffer.
+/// Success message. `partial` marks an incomplete buffer.
 pub fn clip_saved(file_name: &str, partial: bool, got_secs: u32, wanted_secs: u32) {
     let hint = if partial {
         Some(format!(

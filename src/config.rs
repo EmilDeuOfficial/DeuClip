@@ -1,4 +1,4 @@
-//! Konfiguration als JSON unter %APPDATA%\DeuClip\config.json.
+//! Configuration as JSON at %APPDATA%\DeuClip\config.json.
 
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -7,14 +7,14 @@ use std::path::PathBuf;
 pub const MIN_DURATION: u32 = 5;
 pub const MAX_DURATION: u32 = 600;
 
-/// Eine Tastenkombination, unabhaengig von der Hotkey-Bibliothek gespeichert.
+/// A key combination, stored independently of the hotkey library.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct HotkeySpec {
     pub ctrl: bool,
     pub alt: bool,
     pub shift: bool,
     pub win: bool,
-    /// Name der Taste im egui-Format (z.B. "F9", "A", "Num1").
+    /// Key name in egui format (e.g. "F9", "A", "Num1").
     pub key: String,
 }
 
@@ -29,7 +29,7 @@ impl HotkeySpec {
         }
     }
 
-    /// Lesbare Darstellung, z.B. "Strg+Alt+F9".
+    /// Readable form, e.g. "Strg+Alt+F9".
     pub fn label(&self) -> String {
         let mut parts: Vec<String> = Vec::new();
         if self.ctrl {
@@ -68,7 +68,7 @@ impl Quality {
         }
     }
 
-    /// Qualitaetswert (CRF bzw. CQ): kleiner ist besser.
+    /// Quality value (CRF or CQ): lower is better.
     pub fn value(self) -> u32 {
         match self {
             Quality::Low => 30,
@@ -85,14 +85,14 @@ pub struct Config {
     pub hotkey2: HotkeySpec,
     pub duration1: u32,
     pub duration2: u32,
-    /// Ausgabeindex des Monitors (entspricht output_idx bei ddagrab).
+    /// Output index of the monitor (matches output_idx of ddagrab).
     pub monitor_index: u32,
     pub output_dir: String,
     pub quality: Quality,
     pub fps: u32,
-    /// Zielhoehe in Pixeln, 0 bedeutet native Aufloesung.
+    /// Target height in pixels, 0 means native resolution.
     pub scale_height: u32,
-    /// Leer bedeutet automatische Suche.
+    /// Empty means automatic search.
     pub ffmpeg_path: String,
 }
 
@@ -134,15 +134,15 @@ pub fn default_output_dir() -> PathBuf {
 }
 
 impl Config {
-    /// Laedt die Konfiguration. Fehlende oder defekte Dateien ergeben Standardwerte.
+    /// Loads the configuration. A missing or broken file yields the defaults.
     pub fn load() -> Self {
         let path = config_path();
         let mut cfg = match fs::read_to_string(&path) {
-            // Editoren wie Notepad schreiben ein BOM, das serde_json nicht akzeptiert.
+            // Editors such as Notepad write a BOM that serde_json does not accept.
             Ok(text) => match serde_json::from_str::<Config>(text.trim_start_matches('\u{feff}')) {
                 Ok(c) => c,
                 Err(e) => {
-                    log::error!("config.json ist ungueltig, Standardwerte werden genutzt: {e}");
+                    log::error!("config.json is invalid, using the defaults: {e}");
                     Config::default()
                 }
             },
@@ -152,7 +152,7 @@ impl Config {
         cfg
     }
 
-    /// Bringt Werte in gueltige Bereiche.
+    /// Clamps values into valid ranges.
     pub fn sanitize(&mut self) {
         self.duration1 = self.duration1.clamp(MIN_DURATION, MAX_DURATION);
         self.duration2 = self.duration2.clamp(MIN_DURATION, MAX_DURATION);

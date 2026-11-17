@@ -1,4 +1,4 @@
-//! GUI: Hauptfenster, Statusleiste und Verbindung zu Engine, Hotkeys und Konfiguration.
+//! GUI: main window, status bar and the wiring to engine, hotkeys and configuration.
 
 use crate::capture::{self, Command, Engine, Event, MonitorInfo, RecState, Settings};
 use crate::config::{Config, HotkeySpec, Quality, MAX_DURATION, MIN_DURATION};
@@ -27,7 +27,7 @@ pub struct DeuClipApp {
     ui_rx: Receiver<Event>,
     hotkeys: HotkeyService,
     rec_state: RecState,
-    /// Letzte Meldung fuer die Statusleiste: Text und Fehlerflag.
+    /// Last message for the status bar: text and error flag.
     info: Option<(String, bool)>,
     dur_text: [String; 2],
     dur_err: [Option<String>; 2],
@@ -56,8 +56,8 @@ impl DeuClipApp {
                 .unwrap_or(0);
         }
 
-        // Engine -> Dispatcher -> GUI. Der Dispatcher zeigt Benachrichtigungen an,
-        // auch wenn das Fenster minimiert ist.
+        // Engine -> dispatcher -> GUI. The dispatcher shows notifications even
+        // while the window is minimized.
         let (ev_tx, ev_rx) = channel::<Event>();
         let (ui_tx, ui_rx) = channel::<Event>();
         let engine = Engine::spawn(ev_tx);
@@ -91,7 +91,7 @@ impl DeuClipApp {
                 }
             });
         if let Err(e) = spawned {
-            log::error!("Dispatcher-Thread konnte nicht gestartet werden: {e}");
+            log::error!("Could not start the dispatcher thread: {e}");
         }
 
         let hotkeys = HotkeyService::new(engine.sender(), [cfg.duration1, cfg.duration2]);
@@ -123,7 +123,7 @@ impl DeuClipApp {
         app
     }
 
-    // ----- Zustand und Konfiguration -------------------------------------
+    // ----- State and configuration ---------------------------------------
 
     fn spec(&self, slot: usize) -> &HotkeySpec {
         if slot == 0 {
@@ -154,8 +154,8 @@ impl DeuClipApp {
         self.hk_err[slot] = self.hotkeys.set_slot(slot, &spec).err();
     }
 
-    /// Speichert die Konfiguration, meldet Aenderungen an die Engine und startet
-    /// die Aufnahme bei geaenderten Aufnahmeparametern neu.
+    /// Saves the configuration, reports changes to the engine and restarts the
+    /// capture when a capture parameter changed.
     fn commit(&mut self) {
         if let Err(e) = self.cfg.save() {
             log::error!("{e}");
@@ -186,7 +186,7 @@ impl DeuClipApp {
     fn restart_capture(&mut self) {
         match &self.ffmpeg {
             Some(path) => {
-                // Nie hochskalieren: ab der nativen Höhe des Monitors wird nicht skaliert.
+                // Never upscale: from the native monitor height on, no scaling is applied.
                 let native = self
                     .monitors
                     .iter()
@@ -257,7 +257,7 @@ impl DeuClipApp {
         }
     }
 
-    // ----- Hotkey-Aufnahme -----------------------------------------------
+    // ----- Hotkey recording ----------------------------------------------
 
     fn start_capture(&mut self, slot: usize) {
         self.hotkeys.suspend();
@@ -302,7 +302,7 @@ impl DeuClipApp {
             let other = 1 - slot;
             if spec == *self.spec(other) {
                 self.end_capture();
-                // Nach end_capture setzen, da apply_hotkey die Fehlermeldung ueberschreibt.
+                // Set after end_capture because apply_hotkey overwrites the error message.
                 self.hk_err[slot] = Some(format!(
                     "Diese Kombination ist bereits Hotkey {} zugewiesen.",
                     other + 1
@@ -318,7 +318,7 @@ impl DeuClipApp {
         }
     }
 
-    // ----- Datei-Dialoge in eigenem Thread -------------------------------
+    // ----- File dialogs in their own thread ------------------------------
 
     fn pick_folder(&mut self, ctx: &egui::Context) {
         if self.picker_open {
@@ -372,7 +372,7 @@ impl DeuClipApp {
         }
     }
 
-    // ----- Oberflaeche ----------------------------------------------------
+    // ----- User interface ------------------------------------------------
 
     fn dim(text: &str) -> RichText {
         RichText::new(text).color(theme::TEXT_DIM).size(13.0)
@@ -755,6 +755,6 @@ impl eframe::App for DeuClipApp {
     fn on_exit(&mut self, _gl: Option<&eframe::glow::Context>) {
         self.hotkeys.suspend();
         self.engine.shutdown();
-        log::info!("DeuClip beendet");
+        log::info!("DeuClip exited");
     }
 }

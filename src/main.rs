@@ -29,7 +29,7 @@ fn main() {
         Box::new(|cc| Ok(Box::new(app::DeuClipApp::new(cc)))),
     );
     if let Err(e) = result {
-        log::error!("GUI beendet mit Fehler: {e}");
+        log::error!("GUI exited with an error: {e}");
     }
     log::logger().flush();
 }

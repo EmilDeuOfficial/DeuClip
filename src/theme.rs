@@ -1,4 +1,4 @@
-//! Zentrales Design: dunkle Grautoene, gruener Akzent. Keine egui-Standardblautoene.
+//! Central design: dark grays, green accent. No default egui blues.
 
 use eframe::egui::{
     self, vec2, Button, Color32, CornerRadius, FontId, Frame, Margin, RichText, Sense, Shape,
@@ -73,12 +73,12 @@ fn visuals() -> Visuals {
     v
 }
 
-/// Nutzt Segoe UI aus dem Windows-Fontordner. Fehlt die Datei, bleibt die egui-Standardschrift.
+/// Uses Segoe UI from the Windows fonts folder. If the file is missing, the egui default font stays.
 fn install_font(ctx: &egui::Context) {
     let windir = std::env::var_os("WINDIR").unwrap_or_else(|| "C:\\Windows".into());
     let path = std::path::PathBuf::from(windir).join("Fonts").join("segoeui.ttf");
     let Ok(bytes) = std::fs::read(&path) else {
-        log::warn!("Segoe UI nicht gefunden, Standardschrift wird genutzt");
+        log::warn!("Segoe UI not found, using the default font");
         return;
     };
     let mut fonts = egui::FontDefinitions::default();
@@ -91,13 +91,13 @@ fn install_font(ctx: &egui::Context) {
     ctx.set_fonts(fonts);
 }
 
-/// Wendet das komplette Design auf den egui-Kontext an.
+/// Applies the complete design to the egui context.
 pub fn apply(ctx: &egui::Context) {
     ctx.set_theme(egui::ThemePreference::Dark);
     install_font(ctx);
     ctx.all_styles_mut(|style| {
         style.visuals = visuals();
-        // Beschriftungen lassen sich nicht mit der Maus markieren (Eingabefelder weiterhin schon).
+        // Labels cannot be selected with the mouse (text fields still can).
         style.interaction.selectable_labels = false;
         style.spacing.item_spacing = vec2(10.0, 10.0);
         style.spacing.button_padding = vec2(14.0, 6.0);
@@ -114,7 +114,7 @@ pub fn clear_color() -> [f32; 4] {
     BG.to_normalized_gamma_f32()
 }
 
-/// Fenstericon: gruener Punkt auf dunklem, abgerundetem Quadrat.
+/// Window icon: green dot on a dark, rounded square.
 pub fn app_icon() -> egui::IconData {
     const N: u32 = 64;
     let mut rgba = vec![0u8; (N * N * 4) as usize];
@@ -122,7 +122,7 @@ pub fn app_icon() -> egui::IconData {
     for y in 0..N {
         for x in 0..N {
             let (fx, fy) = (x as f32, y as f32);
-            // Abgerundetes Quadrat.
+            // Rounded square.
             let dx = (fx - c).abs() - (c - 10.0);
             let dy = (fy - c).abs() - (c - 10.0);
             let outside = (dx.max(0.0).powi(2) + dy.max(0.0).powi(2)).sqrt() - 10.0;
@@ -147,7 +147,7 @@ pub fn app_icon() -> egui::IconData {
     }
 }
 
-/// Karte mit Titel.
+/// Card with a title.
 pub fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -> R) -> R {
     Frame::new()
         .fill(CARD)
@@ -163,7 +163,7 @@ pub fn card<R>(ui: &mut egui::Ui, title: &str, add: impl FnOnce(&mut egui::Ui) -
         .inner
 }
 
-/// Gruener Hauptbutton.
+/// Green primary button.
 pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     ui.scope(|ui| {
         let w = &mut ui.visuals_mut().widgets;
@@ -182,7 +182,7 @@ pub fn primary_button(ui: &mut egui::Ui, text: &str) -> egui::Response {
     .inner
 }
 
-/// Eintrag in einem Dropdown. Der gewaehlte Eintrag ist gruen hinterlegt.
+/// Entry in a dropdown. The selected entry has a green background.
 pub fn option_row(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Response {
     let color = if selected { ON_ACCENT } else { TEXT };
     let mut button = Button::new(RichText::new(text).color(color)).min_size(vec2(
@@ -197,7 +197,7 @@ pub fn option_row(ui: &mut egui::Ui, selected: bool, text: &str) -> egui::Respon
     ui.add(button)
 }
 
-/// Dropdown mit gruener Auswahl. Gibt true zurueck, wenn sich der Wert geaendert hat.
+/// Dropdown with a green selection. Returns true when the value changed.
 pub fn dropdown<T: PartialEq + Clone>(
     ui: &mut egui::Ui,
     id: &str,
@@ -226,7 +226,7 @@ pub fn dropdown<T: PartialEq + Clone>(
     changed
 }
 
-/// Checkbox im Akzentdesign.
+/// Checkbox in the accent design.
 pub fn checkbox(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response {
     ui.horizontal(|ui| {
         let (rect, mut resp) = ui.allocate_exact_size(vec2(20.0, 20.0), Sense::click());
@@ -258,7 +258,7 @@ pub fn checkbox(ui: &mut egui::Ui, on: &mut bool, label: &str) -> egui::Response
     .inner
 }
 
-/// Statuspunkt.
+/// Status dot.
 pub fn status_dot(ui: &mut egui::Ui, color: Color32) {
     let (rect, _) = ui.allocate_exact_size(vec2(12.0, 12.0), Sense::hover());
     ui.painter().circle_filled(rect.center(), 5.0, color);

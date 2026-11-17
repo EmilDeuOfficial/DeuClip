@@ -1,4 +1,4 @@
-//! Einfacher Datei-Logger: %APPDATA%\DeuClip\deuclip.log
+//! Simple file logger: %APPDATA%\DeuClip\deuclip.log
 
 use log::{LevelFilter, Log, Metadata, Record};
 use std::fs::{self, File, OpenOptions};
@@ -14,7 +14,7 @@ struct FileLogger {
 
 impl Log for FileLogger {
     fn enabled(&self, metadata: &Metadata) -> bool {
-        // Eigene Meldungen ab Info, Fremdbibliotheken nur Warnungen und Fehler.
+        // Own messages from info up, third-party crates only warnings and errors.
         if metadata.target().starts_with("deuclip") {
             metadata.level() <= log::Level::Info
         } else {
@@ -49,7 +49,7 @@ pub fn log_path() -> PathBuf {
     crate::config::app_dir().join("deuclip.log")
 }
 
-/// Startet den Datei-Logger. Gibt den Pfad zurueck, falls es geklappt hat.
+/// Starts the file logger. Returns the path if it worked.
 pub fn init() -> Option<PathBuf> {
     let dir = crate::config::app_dir();
     fs::create_dir_all(&dir).ok()?;
@@ -67,9 +67,9 @@ pub fn init() -> Option<PathBuf> {
     log::set_max_level(LevelFilter::Info);
 
     std::panic::set_hook(Box::new(|info| {
-        log::error!("PANIK: {info}");
+        log::error!("PANIC: {info}");
         log::logger().flush();
     }));
-    log::info!("DeuClip {} gestartet", env!("CARGO_PKG_VERSION"));
+    log::info!("DeuClip {} started", env!("CARGO_PKG_VERSION"));
     Some(path)
 }

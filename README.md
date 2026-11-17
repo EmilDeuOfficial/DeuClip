@@ -1,95 +1,97 @@
 # DeuClip
 
 ![Version](https://img.shields.io/badge/version-v1.1.0-22C55E)
-![Plattform](https://img.shields.io/badge/plattform-Windows%2010%2F11-1C1C1C)
-![Sprache](https://img.shields.io/badge/sprache-Rust-1C1C1C)
-![Lizenz](https://img.shields.io/badge/lizenz-MIT-22C55E)
+![Platform](https://img.shields.io/badge/platform-Windows%2010%2F11-1C1C1C)
+![Language](https://img.shields.io/badge/language-Rust-1C1C1C)
+![License](https://img.shields.io/badge/license-MIT-22C55E)
 
-DeuClip ist ein leichtgewichtiges Clip-Tool für Windows. Es hält die letzten Sekunden deines Bildschirms im Hintergrund vor und speichert sie per Hotkey als MP4.
+DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of your screen in a rolling buffer and saves them as an MP4 when you press a hotkey.
 
 ## Features
 
-- Zwei unabhängige globale Hotkeys mit je eigener Clip-Dauer (5 bis 600 Sekunden, Validierung in der GUI)
-- Hotkeys werden per Tastendruck aufgenommen (Taste plus optional Strg, Alt, Shift, Win), doppelte Kombinationen werden abgelehnt
-- Verständliche Fehlermeldung, wenn eine Kombination von einer anderen Anwendung belegt ist
-- Bildschirmauswahl per Dropdown mit Monitorname, Auflösung und Markierung des Primärmonitors, Neustart der Aufnahme beim Wechsel
-- Ausgabeordner über nativen Ordnerdialog, Standard ist `Videos\Clips`, wird bei Bedarf angelegt
-- Windows-Toast nach dem Speichern ("Clip gespeichert" mit Dateiname) und bei Fehlern
-- Reicht der Puffer nicht aus, wird gespeichert was vorhanden ist und die Benachrichtigung weist darauf hin
-- Dateiname: `clip_JJJJ-MM-TT_HH-MM-SS_<Hotkey-Nummer>.mp4`
-- Aufnahme über FFmpeg mit `ddagrab` (Desktop Duplication), keine Screenshot-Schleifen in Rust
-- Encoder-Auswahl: `h264_nvenc`, dann `h264_qsv`, dann `h264_amf`, Fallback `libx264` mit Preset `ultrafast`
-- Rollender Puffer aus 1-Sekunden-Segmenten, Clips werden per Concat-Demuxer ohne Neukodierung (`-c copy`) zusammengefügt
-- Konfigurierbar: Bildrate, Clip-Auflösung von 480p bis 2160p (4K), Qualität, FFmpeg-Pfad
-- Es wird nie hochskaliert: 4K nimmt nur auf einem 4K-Bildschirm in voller Größe auf
-- Installer (`DeuClip_Setup.exe`) mit deutscher und englischer Oberfläche, lädt FFmpeg bei Bedarf nach
-- Konfiguration als JSON in `%APPDATA%\DeuClip\config.json`, Datei-Log in `%APPDATA%\DeuClip\deuclip.log`
-- Optionaler Autostart mit Windows über den Registry-Run-Key
-- Dunkles Design mit grünem Akzent, zentral in `theme.rs`
-- FFmpeg läuft ohne Konsolenfenster und wird beendet, auch wenn DeuClip abstürzt (Job-Objekt)
-- GUI blockiert nie: Aufnahme, Speichern, Dialoge und Benachrichtigungen laufen in eigenen Threads
+- Two independent global hotkeys, each with its own clip length (5 to 600 seconds, validated in the GUI)
+- Hotkeys are recorded by pressing them (key plus optional Ctrl, Alt, Shift, Win), duplicate combinations are rejected
+- Clear error message when a combination is already taken by another application
+- Screen selection in a dropdown with monitor name, resolution and a primary monitor marker, the capture restarts on change
+- Output folder via the native folder dialog, default is `Videos\Clips`, created when needed
+- Windows toast after saving ("Clip gespeichert" with the file name) and on errors
+- If the buffer is too short, everything available is saved and the notification says so
+- File name: `clip_YYYY-MM-DD_HH-MM-SS_<hotkey number>.mp4`
+- Capture via FFmpeg with `ddagrab` (Desktop Duplication), no screenshot loops in Rust
+- Encoder order: `h264_nvenc`, then `h264_qsv`, then `h264_amf`, fallback `libx264` with preset `ultrafast`
+- Rolling buffer of 1-second segments, clips are joined with the concat demuxer without re-encoding (`-c copy`)
+- Configurable: frame rate, clip resolution from 480p up to 2160p (4K), quality, FFmpeg path
+- Never upscales: 4K records at full size only on a 4K screen
+- Installer (`DeuClip_Setup.exe`) in German and English that downloads FFmpeg when it is missing
+- Configuration as JSON in `%APPDATA%\DeuClip\config.json`, file log in `%APPDATA%\DeuClip\deuclip.log`
+- Optional autostart with Windows via the registry Run key
+- Dark design with a green accent, defined in one place (`theme.rs`)
+- FFmpeg runs without a console window and is terminated even if DeuClip crashes (job object)
+- The GUI never blocks: capture, saving, dialogs and notifications run in their own threads
+
+The user interface of the app is in German.
 
 ## Benchmark
 
-Gemessen mit dem Release-Build auf Windows 11, AMD Ryzen 7 5800X3D, 1920x1080 bei 30 FPS, Encoder `h264_nvenc` (GPU direkt), Fenster geöffnet. Die Werte schwanken je nach System, Messzeitpunkt und Grafiktreiber.
+Measured with the release build on Windows 11, AMD Ryzen 7 5800X3D, 1920x1080 at 30 FPS, encoder `h264_nvenc` (GPU direct), window open. Values vary with system, measuring time and graphics driver.
 
-| Messung | Wert |
+| Measurement | Value |
 | --- | --- |
-| DeuClip CPU im Leerlauf (40 s Mittel, Anteil an der Gesamt-CPU) | 0,08 bis 0,24 % |
-| DeuClip RAM im Leerlauf (Working Set) | ca. 106 bis 170 MB |
-| DeuClip RAM beim Speichern (Spitze, Working Set) | ca. 112 MB |
-| DeuClip CPU-Zeit während eines Speichervorgangs | 0,06 s |
-| FFmpeg CPU während der Aufnahme (Anteil an der Gesamt-CPU) | ca. 0,02 % |
-| Speichern eines 30-Sekunden-Clips | ca. 1,0 s, Datei ca. 8,7 MB |
+| DeuClip CPU at idle (40 s average, share of total CPU) | 0.08 to 0.24 % |
+| DeuClip RAM at idle (working set) | about 106 to 170 MB |
+| DeuClip RAM while saving (peak, working set) | about 112 MB |
+| DeuClip CPU time during a save | 0.06 s |
+| FFmpeg CPU while recording (share of total CPU) | about 0.02 % |
+| Saving a 30 second clip | about 1.0 s, file about 8.7 MB |
 
-Hinweis: Der Arbeitsspeicher der GUI liegt über dem angestrebten Wert von 50 MB. Ein großer Teil davon entfällt auf den OpenGL-Treiber der Grafikkarte.
+Note: the RAM usage of the GUI is above the target of 50 MB. A large part of it comes from the OpenGL driver of the graphics card.
 
 ## Requirements
 
-| Abhängigkeit | Zweck |
+| Dependency | Purpose |
 | --- | --- |
-| Windows 10 oder 11 | Betriebssystem |
-| `ffmpeg.exe` mit dem Filter `ddagrab` (ab FFmpeg 6.0) | Aufnahme und Clip-Erzeugung, Download: [ffmpeg.org](https://ffmpeg.org/download.html), der Installer lädt es bei Bedarf selbst |
-| Rust-Toolchain | nur für den Build |
-| Python 3 und [Inno Setup 6](https://jrsoftware.org/isdl.php) | nur für `build.py` (Installer) |
+| Windows 10 or 11 | Operating system |
+| `ffmpeg.exe` with the `ddagrab` filter (FFmpeg 6.0 or newer) | Capture and clip creation, download: [ffmpeg.org](https://ffmpeg.org/download.html), the installer downloads it when needed |
+| Rust toolchain | Build only |
+| Python 3 and [Inno Setup 6](https://jrsoftware.org/isdl.php) | `build.py` (installer) only |
 
 ## Usage
 
 ### Installer
 
-1. `DeuClip_Setup.exe` starten. Der Installer legt DeuClip pro Benutzer ab, richtet Startmenü und optional eine Desktop-Verknüpfung ein und lädt FFmpeg herunter, falls es weder im `PATH` noch neben der EXE liegt.
-2. DeuClip starten. Der Status unten zeigt "Aufnahme läuft", sobald FFmpeg angelaufen ist.
+1. Run `DeuClip_Setup.exe`. It installs DeuClip per user, creates a Start menu entry and an optional desktop shortcut, and downloads FFmpeg if it is neither in the `PATH` nor next to the EXE.
+2. Start DeuClip. The status bar shows "Aufnahme läuft" (recording) as soon as FFmpeg is up.
 
-### Selbst bauen
+### Build it yourself
 
-1. Nur die EXE:
+1. EXE only:
 
    ```bash
    cargo build --release
    ```
 
-   Die EXE liegt danach unter `target\release\deuclip.exe`.
-2. EXE und Installer (Ergebnis in `dist\`):
+   The EXE is then at `target\release\deuclip.exe`.
+2. EXE and installer (output in `dist\`):
 
    ```bash
    python build.py
    ```
 
-3. `ffmpeg.exe` neben die EXE legen, in den `PATH` aufnehmen oder im Bereich "System" der GUI den Pfad wählen.
+3. Put `ffmpeg.exe` next to the EXE, add it to the `PATH`, or choose its path in the "System" section of the GUI.
 
-### Einrichten
+### Set up
 
-1. Hotkeys einrichten: Auf das Feld der Tastenkombination klicken, die gewünschte Kombination drücken (Esc bricht ab) und die Clip-Dauer in Sekunden eintragen.
-2. Hotkey drücken. Der Clip landet im Ausgabeordner, danach erscheint eine Benachrichtigung.
+1. Set up the hotkeys: click the key combination field, press the combination you want (Esc cancels) and enter the clip length in seconds.
+2. Press a hotkey. The clip is written to the output folder and a notification appears.
 
-## Clip-Auflösung
+## Clip resolution
 
-| Auswahl | Verhalten |
+| Choice | Behavior |
 | --- | --- |
-| Wie Bildschirm | Keine Skalierung, Frames bleiben bei NVIDIA und AMD auf der GPU (geringste Last) |
-| 2160p (4K), 1440p, 1080p, 720p, 480p | Skaliert auf diese Höhe, nie hochskaliert |
+| Like screen | No scaling, frames stay on the GPU with NVIDIA and AMD (lowest load) |
+| 2160p (4K), 1440p, 1080p, 720p, 480p | Scales to this height, never upscales |
 
-4K bedeutet große Dateien und deutlich mehr Last. Ohne Hardware-Encoder ist 4K mit `libx264` auf vielen PCs zu langsam.
+4K means large files and a lot more load. Without a hardware encoder, 4K with `libx264` is too slow on many PCs.
 
 ## File Structure
 
@@ -100,58 +102,58 @@ DeuClip/
 ├── Cargo.lock
 ├── LICENSE
 ├── README.md
-├── build.rs                Bettet Icon und Version in die EXE ein
-├── build.py                Cargo-Build und Inno-Setup-Build (Ergebnis in dist/)
-├── installer.iss           Inno-Setup-Skript (Installer, laedt FFmpeg bei Bedarf)
+├── build.rs                Embeds icon and version into the EXE
+├── build.py                Cargo build and Inno Setup build (output in dist/)
+├── installer.iss           Inno Setup script (installer, downloads FFmpeg when needed)
 ├── img/
-│   ├── app.ico             App-Icon
+│   ├── app.ico             App icon
 │   └── app-icon.svg
 ├── tools/
-│   └── make_icon.py        Erzeugt das Icon
+│   └── make_icon.py        Generates the icon
 └── src/
-    ├── main.rs             Einstieg, Fenster
-    ├── app.rs              GUI und Verbindung zu Engine, Hotkeys, Konfiguration
-    ├── theme.rs            Farben, Schrift und Widgets
-    ├── capture.rs          FFmpeg-Aufnahme, Segmentpuffer, Clip speichern, Monitorliste
-    ├── hotkeys.rs          Globale Hotkeys
+    ├── main.rs             Entry point, window
+    ├── app.rs              GUI and wiring of engine, hotkeys and configuration
+    ├── theme.rs            Colors, font and widgets
+    ├── capture.rs          FFmpeg capture, segment buffer, saving clips, monitor list
+    ├── hotkeys.rs          Global hotkeys
     ├── config.rs           config.json
-    ├── notify.rs           Windows-Toasts
-    ├── autostart.rs        Autostart ueber die Registry
-    └── logging.rs          Datei-Logger
+    ├── notify.rs           Windows toasts
+    ├── autostart.rs        Autostart via the registry
+    └── logging.rs          File logger
 ```
 
-Beim Bauen entsteht zusätzlich `dist/` (nicht im Repository) mit `DeuClip.exe` und `DeuClip_Setup.exe`.
+Building also creates `dist/` (not in the repository) with `DeuClip.exe` and `DeuClip_Setup.exe`.
 
-Zur Laufzeit erzeugte Dateien:
+Files created at runtime:
 
-- `%APPDATA%\DeuClip\config.json`: Hotkeys, Dauern, Monitor, Ausgabeordner, Qualität, Bildrate, Skalierung, FFmpeg-Pfad
-- `%APPDATA%\DeuClip\deuclip.log`: Logdatei (wird ab 1 MB nach `deuclip.old.log` rotiert)
-- `%TEMP%\DeuClip\`: temporärer Segmentpuffer, wird beim Beenden entfernt
+- `%APPDATA%\DeuClip\config.json`: hotkeys, durations, monitor, output folder, quality, frame rate, scaling, FFmpeg path
+- `%APPDATA%\DeuClip\deuclip.log`: log file (rotated to `deuclip.old.log` above 1 MB)
+- `%TEMP%\DeuClip\`: temporary segment buffer, removed on exit
 
 ## Changelog
 
 ### v1.1.0
 
-- Neue Clip-Auflösung 2160p (4K), es wird nie hochskaliert
-- Installer `DeuClip_Setup.exe` (Inno Setup, Deutsch und Englisch), lädt FFmpeg bei Bedarf nach
-- `build.py` baut EXE und Installer, Icon und Versionsinformationen sind in die EXE eingebettet
-- Anzeigename des Monitors, klarere Namen der Auflösungen, Segoe UI als Schrift, Beschriftungen nicht mehr markierbar
+- New clip resolution 2160p (4K), never upscales
+- Installer `DeuClip_Setup.exe` (Inno Setup, German and English) that downloads FFmpeg when needed
+- `build.py` builds the EXE and the installer, icon and version information are embedded in the EXE
+- Monitor display name, clearer resolution names, Segoe UI as font, labels can no longer be selected
 
 ### v1.0.0
 
-- Zwei globale Hotkeys mit eigener Clip-Dauer und Tastenaufnahme in der GUI
-- Rollender Segmentpuffer über FFmpeg und `ddagrab`, Hardware-Encoder mit Fallback auf `libx264`
-- Clip-Erzeugung ohne Neukodierung, Hinweis bei unvollständigem Puffer
-- Monitorauswahl, Ausgabeordner, Qualität, Bildrate und Skalierung einstellbar
-- Windows-Benachrichtigungen, Autostart, Konfiguration und Logdatei
-- Dunkles Design mit grünem Akzent
+- Two global hotkeys with their own clip length and key recording in the GUI
+- Rolling segment buffer via FFmpeg and `ddagrab`, hardware encoders with fallback to `libx264`
+- Clip creation without re-encoding, notice when the buffer is incomplete
+- Monitor selection, output folder, quality, frame rate and scaling are configurable
+- Windows notifications, autostart, configuration and log file
+- Dark design with a green accent
 
 ## License
 
-MIT, siehe Datei [LICENSE](LICENSE).
+MIT, see the [LICENSE](LICENSE) file.
 
 ## About
 
-DeuClip ist ein Instant-Replay-Clip-Tool für Windows, geschrieben in Rust.
+DeuClip is an instant replay clip tool for Windows, written in Rust.
 
 Topics: `rust`, `windows`, `screen-recording`, `ffmpeg`, `egui`, `instant-replay`, `clip`

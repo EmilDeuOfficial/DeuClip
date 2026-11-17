@@ -1,13 +1,13 @@
-#define MyAppName "DeuClip"
-; Wird aus der Versionsressource der EXE gelesen (Version in Cargo.toml).
+﻿#define MyAppName "DeuClip"
+; Read from the version resource of the EXE (version in Cargo.toml).
 #define MyAppVersion GetStringFileInfo(AddBackslash(SourcePath) + "dist\DeuClip.exe", "ProductVersion")
 #if MyAppVersion == ""
-  #error dist\DeuClip.exe hat keine Versionsressource, bitte mit build.py bauen
+  #error dist\DeuClip.exe has no version resource, please build it with build.py
 #endif
 #define MyAppPublisher "EmilDeuOfficial"
 #define MyAppExeName "DeuClip.exe"
 #define MyAppURL "https://github.com/EmilDeuOfficial/DeuClip"
-; Windows-Build von FFmpeg mit ddagrab (immer die neueste Version).
+; Windows build of FFmpeg with ddagrab (always the latest version).
 #define FFmpegZipUrl "https://github.com/yt-dlp/FFmpeg-Builds/releases/latest/download/ffmpeg-master-latest-win64-gpl.zip"
 
 [Setup]
@@ -26,7 +26,7 @@ OutputBaseFilename=DeuClip_Setup
 Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
-; Standardmaessig pro Benutzer ohne Administratorrechte, auf Wunsch fuer alle Benutzer.
+; Per user without administrator rights by default, for all users on request.
 PrivilegesRequired=lowest
 PrivilegesRequiredOverridesAllowed=dialog
 ArchitecturesInstallIn64BitMode=x64compatible
@@ -36,7 +36,7 @@ SetupIconFile=img\app.ico
 MinVersion=10.0
 CloseApplications=yes
 RestartApplications=no
-; Schreibt "Setup Log <Datum>.txt" nach %TEMP%, hilfreich wenn FFmpeg nicht geladen werden konnte.
+; Writes "Setup Log <date>.txt" to %TEMP%, useful when FFmpeg could not be downloaded.
 SetupLogging=yes
 
 [Languages]
@@ -62,7 +62,7 @@ Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{
 Source: "dist\{#MyAppExeName}"; DestDir: "{app}"; Flags: ignoreversion
 
 [UninstallDelete]
-; FFmpeg, das dieses Setup neben die EXE gelegt hat
+; FFmpeg that this setup placed next to the EXE
 Type: files; Name: "{app}\ffmpeg.exe"
 
 [Icons]
@@ -94,7 +94,7 @@ end;
 function OnDownloadProgress(const Url, FileName: String; const Progress, ProgressMax: Int64): Boolean;
 begin
   if Progress = ProgressMax then
-    Log(Format('Download fertig: %s', [FileName]));
+    Log(Format('Download finished: %s', [FileName]));
   Result := True;
 end;
 
@@ -115,8 +115,8 @@ begin
         DownloadPage.Download;
         FFmpegDownloaded := True;
       except
-        // Die Installation laeuft trotzdem weiter, der Hinweis folgt am Ende.
-        Log('FFmpeg-Download fehlgeschlagen: ' + GetExceptionMessage);
+        // The installation continues anyway, the notice follows at the end.
+        Log('FFmpeg download failed: ' + GetExceptionMessage);
       end;
     finally
       DownloadPage.Hide;
@@ -124,7 +124,7 @@ begin
   end;
 end;
 
-// Entpackt nur bin\ffmpeg.exe aus dem Archiv nach {app}.
+// Extracts only bin\ffmpeg.exe from the archive into {app}.
 function ExtractFFmpeg(): Boolean;
 var
   ResultCode: Integer;
@@ -142,7 +142,7 @@ begin
   );
   Result := FileExists(DestFile);
   if not Result then
-    Log(Format('FFmpeg entpacken fehlgeschlagen (Exit-Code %d)', [ResultCode]));
+    Log(Format('FFmpeg extraction failed (exit code %d)', [ResultCode]));
 end;
 
 procedure CurStepChanged(CurStep: TSetupStep);
@@ -160,9 +160,9 @@ end;
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
   if CurUninstallStep = usPostUninstall then begin
-    // Autostart-Eintrag der App entfernen
+    // Remove the autostart entry of the app
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'DeuClip');
-    // Konfiguration und Logdatei entfernen
+    // Remove configuration and log file
     DelTree(ExpandConstant('{userappdata}\DeuClip'), True, True, True);
   end;
 end;
