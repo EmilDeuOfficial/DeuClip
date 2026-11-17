@@ -24,7 +24,9 @@ DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of you
 - Never upscales: 4K records at full size only on a 4K screen
 - Installer (`DeuClip_Setup.exe`) in German and English that downloads FFmpeg when it is missing
 - Configuration as JSON in `%APPDATA%\DeuClip\config.json`, file log in `%APPDATA%\DeuClip\deuclip.log`
-- Optional autostart with Windows via the registry Run key
+- Runs in the background: closing the window hides DeuClip in the tray, recording and hotkeys keep working, "Beenden" in the tray menu (or in the window) exits
+- Optional autostart with Windows via the registry Run key, DeuClip then starts hidden in the tray (`--background`)
+- Single instance: starting DeuClip again only brings the running window to the front
 - Dark design with a green accent, defined in one place (`theme.rs`)
 - FFmpeg runs without a console window and is terminated even if DeuClip crashes (job object)
 - The GUI never blocks: capture, saving, dialogs and notifications run in their own threads
@@ -83,6 +85,7 @@ Note: the RAM usage of the GUI is above the target of 50 MB. A large part of it 
 
 1. Set up the hotkeys: click the key combination field, press the combination you want (Esc cancels) and enter the clip length in seconds.
 2. Press a hotkey. The clip is written to the output folder and a notification appears.
+3. Close the window to keep DeuClip running in the background. Open it again with the tray icon, exit with right click, "Beenden".
 
 ## Clip resolution
 
@@ -119,6 +122,8 @@ DeuClip/
     ├── config.rs           config.json
     ├── notify.rs           Windows toasts
     ├── autostart.rs        Autostart via the registry
+    ├── tray.rs             Tray icon and menu
+    ├── instance.rs         Single instance, shows the window on a second start
     └── logging.rs          File logger
 ```
 

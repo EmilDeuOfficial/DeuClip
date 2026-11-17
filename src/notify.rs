@@ -33,6 +33,11 @@ pub fn clip_saved(file_name: &str, partial: bool, got_secs: u32, wanted_secs: u3
     show("Clip gespeichert".to_string(), file_name.to_string(), hint);
 }
 
+/// Plain information, e.g. that DeuClip keeps running in the tray.
+pub fn info(title: &str, message: &str) {
+    show(title.to_string(), message.to_string(), None);
+}
+
 pub fn error(message: &str) {
     show(
         "DeuClip: Fehler".to_string(),

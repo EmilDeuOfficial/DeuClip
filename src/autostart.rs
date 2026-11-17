@@ -5,6 +5,18 @@ use winreg::RegKey;
 
 const RUN_KEY: &str = r"Software\Microsoft\Windows\CurrentVersion\Run";
 const VALUE_NAME: &str = "DeuClip";
+/// Command line argument of the autostart entry: start hidden in the tray.
+pub const BACKGROUND_ARG: &str = "--background";
+
+/// Rewrites an existing autostart entry so that it points to this EXE and uses
+/// the background argument (older versions wrote the entry without it).
+pub fn refresh() {
+    if is_enabled() {
+        if let Err(e) = set_enabled(true) {
+            log::warn!("Could not refresh the autostart entry: {e}");
+        }
+    }
+}
 
 pub fn is_enabled() -> bool {
     RegKey::predef(HKEY_CURRENT_USER)
@@ -22,7 +34,7 @@ pub fn set_enabled(enabled: bool) -> Result<(), String> {
     if enabled {
         let exe = std::env::current_exe()
             .map_err(|e| format!("Pfad der EXE nicht ermittelbar: {e}"))?;
-        let value = format!("\"{}\"", exe.display());
+        let value = format!("\"{}\" {}", exe.display(), BACKGROUND_ARG);
         key.set_value(VALUE_NAME, &value)
             .map_err(|e| format!("Autostart konnte nicht gesetzt werden: {e}"))
     } else {

@@ -3,6 +3,8 @@
 use crate::capture::{self, Command, Engine, Event, MonitorInfo, RecState, Settings};
 use crate::config::{Config, HotkeySpec, Quality, MAX_DURATION, MIN_DURATION};
 use crate::hotkeys::{self, HotkeyService};
+use crate::instance::Instance;
+use crate::tray::{Tray, TrayAction};
 use crate::{autostart, notify, theme};
 use eframe::egui::{
     self, vec2, Align, Button, CornerRadius, Frame, Label, Layout, Margin, RichText, Stroke,
@@ -39,10 +41,18 @@ pub struct DeuClipApp {
     autostart: bool,
     autostart_err: Option<String>,
     applied_key: Option<CaptureKey>,
+    tray: Option<Tray>,
+    tray_rx: Receiver<TrayAction>,
+    /// true once the user chose to quit: closing the window then really exits.
+    quitting: bool,
+    hide_notice_shown: bool,
+    /// Number of frames in which the window must still be hidden after an autostart.
+    hide_frames_left: u8,
+    _instance: Instance,
 }
 
 impl DeuClipApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
+    pub fn new(cc: &eframe::CreationContext<'_>, instance: Instance, background: bool) -> Self {
         theme::apply(&cc.egui_ctx);
 
         let mut cfg = Config::load();
@@ -97,6 +107,30 @@ impl DeuClipApp {
         let hotkeys = HotkeyService::new(engine.sender(), [cfg.duration1, cfg.duration2]);
         let (picked_tx, picked_rx) = channel();
 
+        // Tray icon and the signal of a second program start.
+        let (tray_tx, tray_rx) = channel::<TrayAction>();
+        let tray = match Tray::new(cc.egui_ctx.clone(), tray_tx.clone()) {
+            Ok(t) => Some(t),
+            Err(e) => {
+                log::error!("{e}");
+                None
+            }
+        };
+        {
+            let tx = tray_tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            instance.listen(move || {
+                let _ = tx.send(TrayAction::Show);
+                ctx.request_repaint();
+            });
+        }
+        let tray_ok = tray.is_some();
+        // Without a tray icon there would be no way back, so the window is shown anyway.
+        if background && tray.is_none() {
+            cc.egui_ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        }
+        autostart::refresh();
+
         let mut app = Self {
             dur_text: [cfg.duration1.to_string(), cfg.duration2.to_string()],
             cfg,
@@ -116,6 +150,12 @@ impl DeuClipApp {
             autostart: autostart::is_enabled(),
             autostart_err: None,
             applied_key: None,
+            tray,
+            tray_rx,
+            quitting: false,
+            hide_notice_shown: false,
+            hide_frames_left: if background && tray_ok { 4 } else { 0 },
+            _instance: instance,
         };
         app.apply_hotkey(0);
         app.apply_hotkey(1);
@@ -370,6 +410,55 @@ impl DeuClipApp {
         if spawned.is_err() {
             self.picker_open = false;
         }
+    }
+
+    // ----- Tray and background -------------------------------------------
+
+    fn show_window(&self, ctx: &egui::Context) {
+        ctx.send_viewport_cmd(egui::ViewportCommand::Visible(true));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Minimized(false));
+        ctx.send_viewport_cmd(egui::ViewportCommand::Focus);
+    }
+
+    fn handle_tray(&mut self, ctx: &egui::Context) {
+        while let Ok(action) = self.tray_rx.try_recv() {
+            match action {
+                TrayAction::Show => self.show_window(ctx),
+                TrayAction::Quit => self.quit(),
+            }
+        }
+    }
+
+    /// Closing the window hides it in the tray. Only "Beenden" really exits.
+    fn handle_close(&mut self, ctx: &egui::Context) {
+        if self.quitting || self.tray.is_none() {
+            return;
+        }
+        if ctx.input(|i| i.viewport().close_requested()) {
+            ctx.send_viewport_cmd(egui::ViewportCommand::CancelClose);
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            if self.capturing.is_some() {
+                self.end_capture();
+            }
+            if !self.hide_notice_shown {
+                self.hide_notice_shown = true;
+                notify::info(
+                    "DeuClip läuft im Hintergrund",
+                    "Öffne es über das Symbol im Infobereich. Beenden: Rechtsklick, Beenden.",
+                );
+            }
+        }
+    }
+
+    /// Stops the capture and exits the process.
+    fn quit(&mut self) -> ! {
+        self.quitting = true;
+        self.tray = None;
+        self.hotkeys.suspend();
+        self.engine.shutdown();
+        log::info!("DeuClip exited");
+        log::logger().flush();
+        std::process::exit(0)
     }
 
     // ----- User interface ------------------------------------------------
@@ -641,7 +730,7 @@ impl DeuClipApp {
             });
             ui.add_space(4.0);
             let mut auto = self.autostart;
-            if theme::checkbox(ui, &mut auto, "Mit Windows starten").changed() {
+            if theme::checkbox(ui, &mut auto, "Mit Windows starten (im Hintergrund)").changed() {
                 match autostart::set_enabled(auto) {
                     Ok(()) => {
                         self.autostart = auto;
@@ -655,6 +744,13 @@ impl DeuClipApp {
             }
             if let Some(e) = &self.autostart_err {
                 ui.label(Self::error_text(e));
+            }
+            ui.add_space(4.0);
+            ui.label(Self::dim(
+                "Das Schließen des Fensters lässt DeuClip im Hintergrund weiterlaufen.",
+            ));
+            if ui.button("DeuClip beenden").clicked() {
+                self.quit();
             }
         });
         changed
@@ -706,12 +802,22 @@ impl DeuClipApp {
 }
 
 impl eframe::App for DeuClipApp {
-    fn logic(&mut self, _ctx: &egui::Context, _frame: &mut eframe::Frame) {
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.drain_events();
+        self.handle_tray(ctx);
+        self.handle_close(ctx);
+        // eframe shows the window after its first frame. After an autostart it is hidden
+        // again in the first frames, so DeuClip starts in the background.
+        if self.hide_frames_left > 0 {
+            self.hide_frames_left -= 1;
+            ctx.send_viewport_cmd(egui::ViewportCommand::Visible(false));
+            ctx.request_repaint();
+        }
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         self.handle_capture(ui);
+        self.handle_close(&ui.ctx().clone());
 
         egui::Panel::bottom("status_bar")
             .frame(
