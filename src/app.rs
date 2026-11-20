@@ -788,6 +788,11 @@ impl DeuClipApp {
                     )
                 }
                 RecState::Starting => (theme::TEXT_DIM, "Aufnahme startet ...".to_string(), false),
+                RecState::Reconnecting => (
+                    theme::TEXT_DIM,
+                    "Aufnahme unterbrochen, verbinde neu ...".to_string(),
+                    false,
+                ),
                 RecState::Stopped => {
                     let t = if self.ffmpeg.is_none() {
                         "Gestoppt: FFmpeg fehlt"

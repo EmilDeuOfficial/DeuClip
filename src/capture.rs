@@ -90,6 +90,8 @@ pub struct Settings {
 pub enum RecState {
     Stopped,
     Starting,
+    /// FFmpeg was interrupted (e.g. desktop duplication lost), a new attempt is running.
+    Reconnecting,
     Running { encoder: String },
     Error(String),
 }
@@ -429,7 +431,7 @@ fn candidates(p: &Probe, scaled: bool) -> Vec<Candidate> {
     list
 }
 
-fn build_args(s: &Settings, cand: Candidate, dir: &Path) -> Vec<String> {
+fn build_args(s: &Settings, cand: Candidate, dir: &Path, start_number: u32) -> Vec<String> {
     let q = s.quality.value().to_string();
     let fps = s.fps.max(1);
     let mut a: Vec<String> = Vec::new();
@@ -481,8 +483,10 @@ fn build_args(s: &Settings, cand: Candidate, dir: &Path) -> Vec<String> {
     push(&["-g", &gop, "-bf", "0", "-an"]);
     push(&[
         "-f", "segment", "-segment_time", "1", "-segment_format", "mpegts",
-        "-reset_timestamps", "1", "-segment_start_number", "0",
+        "-reset_timestamps", "1",
     ]);
+    let start = start_number.to_string();
+    push(&["-segment_start_number", &start]);
     a.push(dir.join("seg_%08d.ts").to_string_lossy().into_owned());
     a
 }
@@ -506,8 +510,8 @@ impl Recorder {
         tail_text(&self.tail)
     }
 
-    /// Stops FFmpeg cleanly ("q") and removes the buffer.
-    fn stop(mut self) {
+    /// Stops FFmpeg cleanly ("q"). With `remove_dir` the buffer is deleted as well.
+    fn stop(mut self, remove_dir: bool) {
         if let Some(mut stdin) = self.stdin.take() {
             let _ = stdin.write_all(b"q\n");
             let _ = stdin.flush();
@@ -524,7 +528,9 @@ impl Recorder {
                 }
             }
         }
-        let _ = fs::remove_dir_all(&self.dir);
+        if remove_dir {
+            let _ = fs::remove_dir_all(&self.dir);
+        }
     }
 }
 
@@ -581,10 +587,33 @@ fn temp_root() -> PathBuf {
     std::env::temp_dir().join("DeuClip")
 }
 
-/// All finished segments in ascending order. The newest one (still being written) is excluded.
-fn finished_segments(dir: &Path) -> Vec<PathBuf> {
+/// Number in the file name of a segment (seg_00000012.ts -> 12).
+fn segment_index(path: &Path) -> Option<u32> {
+    path.file_name()?
+        .to_str()?
+        .strip_prefix("seg_")?
+        .strip_suffix(".ts")?
+        .parse()
+        .ok()
+}
+
+/// Number for the next segment, so that a restarted FFmpeg continues the buffer.
+fn next_segment_number(dir: &Path) -> u32 {
+    all_segments(dir)
+        .iter()
+        .filter_map(|p| segment_index(p))
+        .max()
+        .map(|n| n + 1)
+        .unwrap_or(0)
+}
+
+/// All finished segments in ascending order. While FFmpeg runs, the newest one (still being
+/// written) is excluded.
+fn finished_segments(dir: &Path, recording: bool) -> Vec<PathBuf> {
     let mut files = all_segments(dir);
-    files.pop();
+    if recording {
+        files.pop();
+    }
     files.retain(|p| fs::metadata(p).map(|m| m.len() > 0).unwrap_or(false));
     files
 }
@@ -622,8 +651,9 @@ fn save_clip(
     output_dir: &Path,
     slot: usize,
     duration: u32,
+    recording: bool,
 ) -> Result<SavedClip, String> {
-    let segments = finished_segments(buffer_dir);
+    let segments = finished_segments(buffer_dir, recording);
     if segments.is_empty() {
         return Err("Der Puffer ist noch leer. Bitte kurz warten und erneut versuchen.".to_string());
     }
@@ -704,6 +734,12 @@ impl Engine {
                     output_dir: crate::config::default_output_dir(),
                     retention_secs: 30 + RESERVE_SECS,
                     job: create_job(),
+                    buffer_dir: None,
+                    working: None,
+                    want_running: false,
+                    next_restart: None,
+                    restart_attempts: 0,
+                    error_reported: false,
                 };
                 mgr.run();
             })
@@ -738,6 +774,15 @@ struct Manager {
     output_dir: PathBuf,
     retention_secs: u64,
     job: Option<Job>,
+    /// Segment folder. Survives an interrupted FFmpeg so that clips can still be saved.
+    buffer_dir: Option<PathBuf>,
+    /// Encoder that worked last, tried first after an interruption.
+    working: Option<(Enc, bool)>,
+    /// false after Stop or before the first Start: no automatic restart.
+    want_running: bool,
+    next_restart: Option<Instant>,
+    restart_attempts: u32,
+    error_reported: bool,
 }
 
 impl Manager {
@@ -757,6 +802,8 @@ impl Manager {
             match self.rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Command::Start(s)) => self.start(s),
                 Ok(Command::Stop) => {
+                    self.want_running = false;
+                    self.next_restart = None;
                     self.stop_recording();
                     self.state(RecState::Stopped);
                 }
@@ -766,6 +813,7 @@ impl Manager {
                 }
                 Ok(Command::Save { slot, duration }) => self.save(slot, duration),
                 Ok(Command::Shutdown) => {
+                    self.want_running = false;
                     self.stop_recording();
                     let _ = fs::remove_dir_all(temp_root());
                     break;
@@ -775,6 +823,7 @@ impl Manager {
                     self.tick(ticks);
                 }
                 Err(RecvTimeoutError::Disconnected) => {
+                    self.want_running = false;
                     self.stop_recording();
                     let _ = fs::remove_dir_all(temp_root());
                     break;
@@ -783,42 +832,69 @@ impl Manager {
         }
     }
 
+    /// Stops FFmpeg and removes the buffer.
     fn stop_recording(&mut self) {
         if let Some(rec) = self.rec.take() {
-            rec.stop();
+            rec.stop(true);
+        }
+        if let Some(dir) = self.buffer_dir.take() {
+            let _ = fs::remove_dir_all(dir);
         }
     }
 
     fn start(&mut self, s: Settings) {
         self.stop_recording();
+        self.want_running = true;
+        self.restart_attempts = 0;
+        self.error_reported = false;
+        self.next_restart = None;
+        self.working = None;
         self.settings = Some(s.clone());
         self.state(RecState::Starting);
+        if let Err(msg) = self.begin(&s, false) {
+            log::error!("{msg}");
+            self.want_running = false;
+            self.state(RecState::Error(msg));
+        }
+    }
 
+    /// Starts FFmpeg. With `resume` the existing buffer is kept and the numbering continues.
+    fn begin(&mut self, s: &Settings, resume: bool) -> Result<(), String> {
         let probe = probe(&s.ffmpeg);
         if !probe.ddagrab {
-            let msg = "Diese FFmpeg-Version enthaelt den Filter ddagrab nicht. Bitte ein aktuelles Windows-Build (ab Version 6.0) verwenden.".to_string();
-            log::error!("{msg}");
-            self.state(RecState::Error(msg));
-            return;
+            return Err("Diese FFmpeg-Version enthaelt den Filter ddagrab nicht. Bitte ein aktuelles Windows-Build (ab Version 6.0) verwenden.".to_string());
         }
 
-        let dir = temp_root().join(format!("buf_{}", std::process::id()));
-        let _ = fs::remove_dir_all(&dir);
-        if let Err(e) = fs::create_dir_all(&dir) {
-            let msg = format!("Temporaerer Ordner nicht anlegbar: {e}");
-            log::error!("{msg}");
-            self.state(RecState::Error(msg));
-            return;
+        let dir = match (&self.buffer_dir, resume) {
+            (Some(d), true) => d.clone(),
+            _ => {
+                let d = temp_root().join(format!("buf_{}", std::process::id()));
+                let _ = fs::remove_dir_all(&d);
+                fs::create_dir_all(&d)
+                    .map_err(|e| format!("Temporaerer Ordner nicht anlegbar: {e}"))?;
+                d
+            }
+        };
+        let start_number = if resume { next_segment_number(&dir) } else { 0 };
+
+        let mut list = candidates(&probe, s.scale_height > 0);
+        if resume {
+            if let Some((enc, direct)) = self.working {
+                if let Some(pos) = list.iter().position(|c| c.enc == enc && c.direct == direct) {
+                    let first = list.remove(pos);
+                    list.insert(0, first);
+                }
+            }
         }
 
         let mut last_error = String::from("Kein Encoder konnte gestartet werden.");
-        for cand in candidates(&probe, s.scale_height > 0) {
+        for cand in list {
             let label = if cand.direct {
                 format!("{} (GPU direct)", cand.enc.name())
             } else {
                 cand.enc.name().to_string()
             };
-            let args = build_args(&s, cand, &dir);
+            let args = build_args(s, cand, &dir, start_number);
             log::info!("Starting FFmpeg with {label}");
             let mut rec = match spawn_ffmpeg(&s.ffmpeg, &args, &dir, &label) {
                 Ok(r) => r,
@@ -849,22 +925,67 @@ impl Manager {
                 } else {
                     tail
                 };
+                // Remove only what this attempt wrote, the older buffer stays.
                 for seg in all_segments(&dir) {
-                    let _ = fs::remove_file(seg);
+                    if segment_index(&seg).map(|n| n >= start_number).unwrap_or(false) {
+                        let _ = fs::remove_file(seg);
+                    }
                 }
                 continue;
             }
             log::info!("Capture running with {label}");
+            self.working = Some((cand.enc, cand.direct));
+            self.buffer_dir = Some(dir.clone());
             let enc = rec.encoder.clone();
             self.rec = Some(rec);
             self.state(RecState::Running { encoder: enc });
-            return;
+            return Ok(());
         }
 
-        let _ = fs::remove_dir_all(&dir);
-        let msg = format!("Aufnahme konnte nicht gestartet werden: {last_error}");
-        log::error!("{msg}");
-        self.state(RecState::Error(msg));
+        if !resume {
+            let _ = fs::remove_dir_all(&dir);
+        }
+        Err(format!("Aufnahme konnte nicht gestartet werden: {last_error}"))
+    }
+
+    /// FFmpeg ended or stalled (e.g. DXGI_ERROR_ACCESS_LOST when a fullscreen app takes
+    /// over the screen): keep the buffer and try again with a growing delay.
+    fn capture_lost(&mut self, msg: String) {
+        log::warn!("Capture interrupted: {msg}");
+        if let Some(rec) = self.rec.take() {
+            rec.stop(false);
+        }
+        self.schedule_restart(msg);
+    }
+
+    fn schedule_restart(&mut self, msg: String) {
+        if !self.want_running {
+            return;
+        }
+        self.restart_attempts += 1;
+        let delays = [1u64, 2, 4, 8, 15];
+        let delay = delays[(self.restart_attempts as usize - 1).min(delays.len() - 1)];
+        self.next_restart = Some(Instant::now() + Duration::from_secs(delay));
+        if self.restart_attempts >= 5 && !self.error_reported {
+            // Reported once, the attempts continue in the background.
+            self.error_reported = true;
+            self.state(RecState::Error(format!(
+                "Die Aufnahme ist unterbrochen und wird weiter neu versucht. {msg}"
+            )));
+        } else if !self.error_reported {
+            self.state(RecState::Reconnecting);
+        }
+    }
+
+    fn try_resume(&mut self) {
+        let Some(settings) = self.settings.clone() else { return };
+        if !self.error_reported {
+            self.state(RecState::Reconnecting);
+        }
+        match self.begin(&settings, true) {
+            Ok(()) => log::info!("Capture resumed after {} attempt(s)", self.restart_attempts),
+            Err(msg) => self.schedule_restart(msg),
+        }
     }
 
     fn tick(&mut self, ticks: u32) {
@@ -882,7 +1003,6 @@ impl Manager {
                     {
                         rec.empty_warned = true;
                         let tail = rec.tail_text();
-                        log::error!("FFmpeg is running but writes no segments. {tail}");
                         failure = Some(format!("FFmpeg liefert keine Daten. {tail}"));
                     }
                 }
@@ -890,18 +1010,33 @@ impl Manager {
             }
         }
         if let Some(msg) = failure {
-            log::error!("{msg}");
-            self.stop_recording();
-            self.state(RecState::Error(msg));
-            return;
+            self.capture_lost(msg);
         }
 
-        // Clean up old segments every 2 seconds.
+        // A stable capture resets the retry counter.
+        if let Some(rec) = &self.rec {
+            if self.restart_attempts > 0 && rec.started.elapsed() > Duration::from_secs(30) {
+                self.restart_attempts = 0;
+                self.error_reported = false;
+            }
+        }
+
+        // Next attempt after an interruption.
+        if self.rec.is_none() && self.want_running {
+            if let Some(at) = self.next_restart {
+                if Instant::now() >= at {
+                    self.next_restart = None;
+                    self.try_resume();
+                }
+            }
+        }
+
+        // Clean up old segments every 2 seconds (also while FFmpeg is interrupted).
         if ticks % 4 == 0 {
-            if let Some(rec) = &self.rec {
+            if let Some(dir) = &self.buffer_dir {
                 let max_age = Duration::from_secs(self.retention_secs);
                 let now = SystemTime::now();
-                for seg in all_segments(&rec.dir) {
+                for seg in all_segments(dir) {
                     let old = fs::metadata(&seg)
                         .and_then(|m| m.modified())
                         .ok()
@@ -917,7 +1052,7 @@ impl Manager {
     }
 
     fn save(&mut self, slot: usize, duration: u32) {
-        let (Some(rec), Some(settings)) = (self.rec.as_ref(), self.settings.as_ref()) else {
+        let (Some(dir), Some(settings)) = (self.buffer_dir.clone(), self.settings.as_ref()) else {
             self.emit(Event::SaveFailed {
                 slot,
                 message: "Die Aufnahme laeuft nicht. Clip kann nicht gespeichert werden.".to_string(),
@@ -925,13 +1060,14 @@ impl Manager {
             return;
         };
         let ffmpeg = settings.ffmpeg.clone();
-        let buffer_dir = rec.dir.clone();
+        let buffer_dir = dir;
+        let recording = self.rec.is_some();
         let output_dir = self.output_dir.clone();
         let events = self.events.clone();
         let spawned = thread::Builder::new()
             .name("deuclip-save".into())
             .spawn(move || {
-                match save_clip(&ffmpeg, &buffer_dir, &output_dir, slot, duration) {
+                match save_clip(&ffmpeg, &buffer_dir, &output_dir, slot, duration, recording) {
                     Ok(clip) => {
                         log::info!(
                             "Clip gespeichert: {} ({} s, partial={})",

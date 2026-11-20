@@ -29,6 +29,7 @@ DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of you
 - Optional autostart with Windows via the registry Run key, DeuClip then starts hidden in the tray (`--background`)
 - Single instance: starting DeuClip again only brings the running window to the front
 - Dark design with a green accent, defined in one place (`theme.rs`)
+- Recovers from capture interruptions (for example `DXGI_ERROR_ACCESS_LOST` when a fullscreen app takes over the screen): FFmpeg is restarted automatically, the buffer is kept and clips can still be saved meanwhile
 - FFmpeg runs without a console window and is terminated even if DeuClip crashes (job object)
 - The GUI never blocks: capture, saving, dialogs and notifications run in their own threads
 
