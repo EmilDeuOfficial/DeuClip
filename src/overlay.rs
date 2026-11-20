@@ -1,8 +1,9 @@
 //! Small on-screen notification at the bottom left: "clip saved" or "failed".
 //!
-//! A borderless, always-on-top window that never takes focus and ignores the mouse.
-//! It runs in its own thread, so it also works while the main window is hidden in the
-//! tray, and it is excluded from screen capture so it never ends up in a clip.
+//! A borderless, always-on-top window that never takes focus. It runs in its own thread,
+//! so it also works while the main window is hidden in the tray, and it is excluded from
+//! screen capture so it never ends up in a clip. A "clip saved" notification can be
+//! clicked to open the clip, every other notification lets mouse clicks pass through.
 
 use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
@@ -19,13 +20,14 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW, KillTimer,
-    LoadCursorW, PostMessageW, RegisterClassW, SetLayeredWindowAttributes, SetTimer,
-    SetWindowDisplayAffinity, SetWindowPos, ShowWindow, TranslateMessage,
-    HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, LWA_ALPHA, MSG, SWP_NOACTIVATE, SWP_SHOWWINDOW,
-    SW_HIDE, WDA_EXCLUDEFROMCAPTURE, WM_APP, WM_ERASEBKGND, WM_NCHITTEST, WM_PAINT, WM_TIMER,
-    WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DispatchMessageW, GetClientRect, GetMessageW,
+    GetWindowLongPtrW, KillTimer, LoadCursorW, PostMessageW, RegisterClassW,
+    SetCursor, SetLayeredWindowAttributes, SetTimer, SetWindowDisplayAffinity, SetWindowLongPtrW,
+    SetWindowPos, ShowWindow, TranslateMessage, GWL_EXSTYLE, HWND_TOPMOST, IDC_ARROW, IDC_HAND,
+    LWA_ALPHA, MA_NOACTIVATE, MSG, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_SHOWWINDOW, SW_HIDE,
+    WDA_EXCLUDEFROMCAPTURE, WM_APP, WM_ERASEBKGND, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_PAINT,
+    WM_SETCURSOR, WM_TIMER, WNDCLASSW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 
 const BG: (u8, u8, u8) = (0x25, 0x25, 0x25);
@@ -35,12 +37,16 @@ const ERROR: (u8, u8, u8) = (0xC8, 0x6B, 0x66);
 const TEXT: (u8, u8, u8) = (0xE5, 0xE5, 0xE5);
 const TEXT_DIM: (u8, u8, u8) = (0x9A, 0x9A, 0x9A);
 
-const SHOW_MS: u32 = 3500;
+const SHOW_MS: u32 = 4500;
 const TIMER_HIDE: usize = 1;
 const TIMER_FADE: usize = 2;
+/// Re-asserts the top position, some games keep pushing their own window to the top.
+const TIMER_TOP: usize = 3;
 
 struct State {
     ok: bool,
+    /// A click opens the last clip.
+    clickable: bool,
     title: String,
     detail: String,
     alpha: u8,
@@ -48,6 +54,7 @@ struct State {
 
 static STATE: Mutex<State> = Mutex::new(State {
     ok: true,
+    clickable: false,
     title: String::new(),
     detail: String::new(),
     alpha: 255,
@@ -85,8 +92,18 @@ pub fn set_anchor(x: i32, y: i32) {
 
 /// Shows the notification for a few seconds. A new one replaces the current one.
 pub fn show(ok: bool, title: &str, detail: &str) {
+    post(ok, false, title, detail);
+}
+
+/// Like `show` for a saved clip: a click on the notification opens the clip.
+pub fn show_clip(title: &str, detail: &str) {
+    post(true, true, title, detail);
+}
+
+fn post(ok: bool, clickable: bool, title: &str, detail: &str) {
     if let Ok(mut s) = STATE.lock() {
         s.ok = ok;
+        s.clickable = clickable;
         s.title = title.to_string();
         s.detail = detail.to_string();
     }
@@ -156,9 +173,13 @@ unsafe fn run() {
     }
 }
 
+fn is_clickable() -> bool {
+    STATE.lock().map(|s| s.clickable).unwrap_or(false)
+}
+
 unsafe fn present(hwnd: HWND) {
     let s = scale();
-    let (w, h) = ((350.0 * s) as i32, (72.0 * s) as i32);
+    let (w, h) = ((350.0 * s) as i32, (84.0 * s) as i32);
     let margin = (24.0 * s) as i32;
 
     let anchor = ANCHOR.lock().ok().and_then(|a| *a).unwrap_or((0, 0));
@@ -177,6 +198,15 @@ unsafe fn present(hwnd: HWND) {
     if let Ok(mut st) = STATE.lock() {
         st.alpha = 255;
     }
+    // Only a clickable notification takes mouse clicks, all others let them pass through.
+    let mut ex = GetWindowLongPtrW(hwnd, GWL_EXSTYLE);
+    if is_clickable() {
+        ex &= !(WS_EX_TRANSPARENT.0 as isize);
+    } else {
+        ex |= WS_EX_TRANSPARENT.0 as isize;
+    }
+    SetWindowLongPtrW(hwnd, GWL_EXSTYLE, ex);
+
     let _ = KillTimer(Some(hwnd), TIMER_FADE);
     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA);
     let radius = (10.0 * s) as i32;
@@ -186,6 +216,14 @@ unsafe fn present(hwnd: HWND) {
     SetWindowRgn(hwnd, Some(region), true);
     let _ = InvalidateRect(Some(hwnd), None, true);
     SetTimer(Some(hwnd), TIMER_HIDE, SHOW_MS, None);
+    SetTimer(Some(hwnd), TIMER_TOP, 200, None);
+}
+
+unsafe fn hide(hwnd: HWND) {
+    let _ = KillTimer(Some(hwnd), TIMER_HIDE);
+    let _ = KillTimer(Some(hwnd), TIMER_FADE);
+    let _ = KillTimer(Some(hwnd), TIMER_TOP);
+    let _ = ShowWindow(hwnd, SW_HIDE);
 }
 
 unsafe fn fill(hdc: HDC, rect: &RECT, color: (u8, u8, u8)) {
@@ -278,6 +316,16 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             if wparam.0 == TIMER_HIDE {
                 let _ = KillTimer(Some(hwnd), TIMER_HIDE);
                 SetTimer(Some(hwnd), TIMER_FADE, 16, None);
+            } else if wparam.0 == TIMER_TOP {
+                let _ = SetWindowPos(
+                    hwnd,
+                    Some(HWND_TOPMOST),
+                    0,
+                    0,
+                    0,
+                    0,
+                    SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+                );
             } else if wparam.0 == TIMER_FADE {
                 let alpha = match STATE.lock() {
                     Ok(mut st) => {
@@ -287,8 +335,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     Err(_) => 0,
                 };
                 if alpha == 0 {
-                    let _ = KillTimer(Some(hwnd), TIMER_FADE);
-                    let _ = ShowWindow(hwnd, SW_HIDE);
+                    hide(hwnd);
                 } else {
                     let _ = SetLayeredWindowAttributes(hwnd, COLORREF(0), alpha, LWA_ALPHA);
                 }
@@ -303,7 +350,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_ERASEBKGND => LRESULT(1),
-        WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+        // A click never activates the window, so a game keeps its focus.
+        WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_SETCURSOR => {
+            let id = if is_clickable() { IDC_HAND } else { IDC_ARROW };
+            if let Ok(cursor) = LoadCursorW(None, id) {
+                SetCursor(Some(cursor));
+            }
+            LRESULT(1)
+        }
+        WM_LBUTTONUP => {
+            if is_clickable() {
+                hide(hwnd);
+                crate::lastclip::open_last();
+            }
+            LRESULT(0)
+        }
         _ => DefWindowProcW(hwnd, msg, wparam, lparam),
     }
 }

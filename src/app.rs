@@ -5,7 +5,7 @@ use crate::config::{Config, HotkeySpec, Quality, MAX_DURATION, MIN_DURATION};
 use crate::hotkeys::{self, HotkeyService};
 use crate::instance::Instance;
 use crate::tray::{Tray, TrayAction};
-use crate::{autostart, notify, overlay, theme};
+use crate::{autostart, lastclip, notify, overlay, theme};
 use eframe::egui::{
     self, vec2, Align, Button, CornerRadius, Frame, Label, Layout, Margin, RichText, Stroke,
     TextEdit,
@@ -33,7 +33,7 @@ pub struct DeuClipApp {
     info: Option<(String, bool)>,
     dur_text: [String; 2],
     dur_err: [Option<String>; 2],
-    hk_err: [Option<String>; 2],
+    hk_err: [Option<String>; 3],
     capturing: Option<usize>,
     picked_tx: Sender<Picked>,
     picked_rx: Receiver<Picked>,
@@ -97,17 +97,20 @@ impl DeuClipApp {
                                 .file_name()
                                 .map(|n| n.to_string_lossy().into_owned())
                                 .unwrap_or_else(|| path.to_string_lossy().into_owned());
-                            notify::clip_saved(&name, *partial, *got_secs, *wanted_secs);
-                            let detail = if *partial {
-                                format!("{name} ({got_secs} s von {wanted_secs} s)")
+                            lastclip::set_last(path.clone());
+                            notify::clip_saved(path, *partial, *got_secs, *wanted_secs);
+                            let title = if *partial {
+                                format!("Clip gespeichert ({got_secs} s von {wanted_secs} s)")
                             } else {
-                                name
+                                "Clip gespeichert".to_string()
                             };
-                            overlay::show(true, "Clip gespeichert", &detail);
+                            overlay::show_clip(&title, &format!("{name}\nZum Öffnen klicken"));
+                            notify::beep(true);
                         }
                         Event::SaveFailed { message, .. } => {
                             notify::error(message);
                             overlay::show(false, "Clip nicht gespeichert", message);
+                            notify::beep(false);
                         }
                         Event::State(RecState::Error(message)) => {
                             had_error = true;
@@ -171,7 +174,7 @@ impl DeuClipApp {
             rec_state: RecState::Stopped,
             info: None,
             dur_err: [None, None],
-            hk_err: [None, None],
+            hk_err: [None, None, None],
             capturing: None,
             picked_tx,
             picked_rx,
@@ -188,6 +191,7 @@ impl DeuClipApp {
         };
         app.apply_hotkey(0);
         app.apply_hotkey(1);
+        app.apply_hotkey(2);
         app.commit();
 
         if app.ffmpeg.is_none() {
@@ -196,9 +200,9 @@ impl DeuClipApp {
                     .to_string(),
             );
         }
-        for slot in 0..2 {
+        for slot in 0..3 {
             if let Some(e) = &app.hk_err[slot] {
-                problems.push(format!("Hotkey {}: {}", slot + 1, e));
+                problems.push(format!("{}: {}", Self::slot_name(slot), e));
             }
         }
         if let Some(e) = &app.hotkeys.init_error {
@@ -221,18 +225,27 @@ impl DeuClipApp {
     // ----- State and configuration ---------------------------------------
 
     fn spec(&self, slot: usize) -> &HotkeySpec {
-        if slot == 0 {
-            &self.cfg.hotkey1
+        match slot {
+            0 => &self.cfg.hotkey1,
+            1 => &self.cfg.hotkey2,
+            _ => &self.cfg.hotkey3,
+        }
+    }
+
+    /// Name of a hotkey slot in messages.
+    fn slot_name(slot: usize) -> String {
+        if slot == 2 {
+            "Clip öffnen".to_string()
         } else {
-            &self.cfg.hotkey2
+            format!("Hotkey {}", slot + 1)
         }
     }
 
     fn set_spec(&mut self, slot: usize, spec: HotkeySpec) {
-        if slot == 0 {
-            self.cfg.hotkey1 = spec;
-        } else {
-            self.cfg.hotkey2 = spec;
+        match slot {
+            0 => self.cfg.hotkey1 = spec,
+            1 => self.cfg.hotkey2 = spec,
+            _ => self.cfg.hotkey3 = spec,
         }
     }
 
@@ -258,6 +271,8 @@ impl DeuClipApp {
         }
         self.hotkeys
             .set_durations([self.cfg.duration1, self.cfg.duration2]);
+        notify::set_sound(self.cfg.sound);
+        lastclip::set_output_dir(self.cfg.output_path());
         let retention = self.cfg.duration1.max(self.cfg.duration2) as u64 + capture::RESERVE_SECS;
         self.engine.send(Command::Configure {
             output_dir: self.cfg.output_path(),
@@ -369,6 +384,7 @@ impl DeuClipApp {
         self.capturing = None;
         self.apply_hotkey(0);
         self.apply_hotkey(1);
+        self.apply_hotkey(2);
     }
 
     fn handle_capture(&mut self, ui: &egui::Ui) {
@@ -399,13 +415,13 @@ impl DeuClipApp {
                 win: hotkeys::win_key_down(),
                 key: key.name().to_string(),
             };
-            let other = 1 - slot;
-            if spec == *self.spec(other) {
+            let taken = (0..3).find(|&o| o != slot && spec == *self.spec(o));
+            if let Some(other) = taken {
                 self.end_capture();
                 // Set after end_capture because apply_hotkey overwrites the error message.
                 self.hk_err[slot] = Some(format!(
-                    "Diese Kombination ist bereits Hotkey {} zugewiesen.",
-                    other + 1
+                    "Diese Kombination ist bereits für \"{}\" vergeben.",
+                    Self::slot_name(other)
                 ));
             } else {
                 self.set_spec(slot, spec);
@@ -636,6 +652,32 @@ impl DeuClipApp {
                         }
                         ui.end_row();
                     }
+
+                    // Third hotkey: open the last clip.
+                    ui.label("Clip öffnen");
+                    let capturing = self.capturing == Some(2);
+                    let text = if capturing {
+                        "Taste drücken ...".to_string()
+                    } else {
+                        self.spec(2).label()
+                    };
+                    let mut button =
+                        Button::new(RichText::new(text).strong()).min_size(vec2(200.0, 30.0));
+                    if capturing {
+                        button = button.stroke(Stroke::new(1.5, theme::ACCENT));
+                    }
+                    if ui.add(button).clicked() {
+                        if capturing {
+                            self.end_capture();
+                        } else {
+                            self.start_capture(2);
+                        }
+                    }
+                    ui.label(Self::dim("öffnet den letzten Clip"));
+                    if ui.button("Jetzt öffnen").clicked() {
+                        lastclip::open_last();
+                    }
+                    ui.end_row();
                 });
 
             if self.capturing.is_some() {
@@ -643,10 +685,12 @@ impl DeuClipApp {
                     "Gewünschte Kombination drücken. Esc bricht ab.",
                 ));
             }
-            for slot in 0..2 {
+            for slot in 0..3 {
                 if let Some(e) = &self.hk_err[slot] {
-                    ui.label(Self::error_text(&format!("Hotkey {}: {}", slot + 1, e)));
+                    ui.label(Self::error_text(&format!("{}: {}", Self::slot_name(slot), e)));
                 }
+            }
+            for slot in 0..2 {
                 if let Some(e) = &self.dur_err[slot] {
                     ui.label(Self::error_text(e));
                 }
@@ -789,6 +833,11 @@ impl DeuClipApp {
                 }
             });
             ui.add_space(4.0);
+            let mut sound = self.cfg.sound;
+            if theme::checkbox(ui, &mut sound, "Ton beim Speichern (auch im Vollbild hörbar)").changed() {
+                self.cfg.sound = sound;
+                changed = true;
+            }
             let mut auto = self.autostart;
             if theme::checkbox(ui, &mut auto, "Mit Windows starten (im Hintergrund)").changed() {
                 match autostart::set_enabled(auto) {

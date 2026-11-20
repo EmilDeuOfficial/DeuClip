@@ -73,7 +73,7 @@ impl Quality {
         match self {
             Quality::Low => 30,
             Quality::Medium => 25,
-            Quality::High => 21,
+            Quality::High => 16,
         }
     }
 }
@@ -83,6 +83,8 @@ impl Quality {
 pub struct Config {
     pub hotkey1: HotkeySpec,
     pub hotkey2: HotkeySpec,
+    /// Opens the last saved clip.
+    pub hotkey3: HotkeySpec,
     pub duration1: u32,
     pub duration2: u32,
     /// Output index of the monitor (matches output_idx of ddagrab).
@@ -94,6 +96,8 @@ pub struct Config {
     pub scale_height: u32,
     /// Empty means automatic search.
     pub ffmpeg_path: String,
+    /// Short sound when a clip was saved or failed (audible in fullscreen games, too).
+    pub sound: bool,
 }
 
 impl Default for Config {
@@ -101,6 +105,7 @@ impl Default for Config {
         Self {
             hotkey1: HotkeySpec::new(true, true, false, false, "F9"),
             hotkey2: HotkeySpec::new(true, true, false, false, "F10"),
+            hotkey3: HotkeySpec::new(true, true, false, false, "F11"),
             duration1: 30,
             duration2: 60,
             monitor_index: 0,
@@ -109,6 +114,7 @@ impl Default for Config {
             fps: 30,
             scale_height: 0,
             ffmpeg_path: String::new(),
+            sound: true,
         }
     }
 }
@@ -168,10 +174,14 @@ impl Config {
         if self.output_dir.trim().is_empty() {
             self.output_dir = default_output_dir().to_string_lossy().into_owned();
         }
-        if self.hotkey1 == self.hotkey2 {
+        if self.hotkey1 == self.hotkey2
+            || self.hotkey1 == self.hotkey3
+            || self.hotkey2 == self.hotkey3
+        {
             let d = Config::default();
             self.hotkey1 = d.hotkey1;
             self.hotkey2 = d.hotkey2;
+            self.hotkey3 = d.hotkey3;
         }
     }
 

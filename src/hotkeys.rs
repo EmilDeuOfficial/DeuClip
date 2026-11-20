@@ -91,13 +91,13 @@ pub fn win_key_down() -> bool {
 }
 
 struct Shared {
-    ids: Mutex<[Option<u32>; 2]>,
+    ids: Mutex<[Option<u32>; 3]>,
     durations: Mutex<[u32; 2]>,
 }
 
 pub struct HotkeyService {
     manager: Option<GlobalHotKeyManager>,
-    registered: [Option<HotKey>; 2],
+    registered: [Option<HotKey>; 3],
     shared: Arc<Shared>,
     pub init_error: Option<String>,
 }
@@ -106,7 +106,7 @@ impl HotkeyService {
     /// Must be created on the main thread (which runs the message loop).
     pub fn new(commands: Sender<Command>, durations: [u32; 2]) -> Self {
         let shared = Arc::new(Shared {
-            ids: Mutex::new([None, None]),
+            ids: Mutex::new([None, None, None]),
             durations: Mutex::new(durations),
         });
 
@@ -131,7 +131,7 @@ impl HotkeyService {
 
         Self {
             manager,
-            registered: [None, None],
+            registered: [None, None, None],
             shared,
             init_error,
         }
@@ -187,16 +187,17 @@ impl HotkeyService {
         }
     }
 
-    /// Releases both hotkeys (e.g. while recording a new combination).
+    /// Releases all hotkeys (e.g. while recording a new combination).
     pub fn suspend(&mut self) {
         self.clear_slot(0);
         self.clear_slot(1);
+        self.clear_slot(2);
     }
 }
 
 fn listener(shared: Arc<Shared>, commands: Sender<Command>) {
     let receiver = GlobalHotKeyEvent::receiver();
-    let mut last: [Option<Instant>; 2] = [None, None];
+    let mut last: [Option<Instant>; 3] = [None, None, None];
     while let Ok(event) = receiver.recv() {
         if event.state != HotKeyState::Pressed {
             continue;
@@ -213,6 +214,12 @@ fn listener(shared: Arc<Shared>, commands: Sender<Command>) {
             }
         }
         last[slot] = Some(Instant::now());
+        // Slot 3 opens the last clip, the others save a clip.
+        if slot == 2 {
+            log::info!("Hotkey 3 triggered (open last clip)");
+            crate::lastclip::open_last();
+            continue;
+        }
         let duration = shared.durations.lock().map(|d| d[slot]).unwrap_or(30);
         log::info!("Hotkey {} triggered ({} s)", slot + 1, duration);
         if commands.send(Command::Save { slot, duration }).is_err() {

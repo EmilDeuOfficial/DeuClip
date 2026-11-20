@@ -6,6 +6,7 @@ mod capture;
 mod config;
 mod hotkeys;
 mod instance;
+mod lastclip;
 mod logging;
 mod notify;
 mod overlay;

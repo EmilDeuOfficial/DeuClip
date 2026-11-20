@@ -10,18 +10,20 @@ DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of you
 ## Features
 
 - Two independent global hotkeys, each with its own clip length (5 to 600 seconds, validated in the GUI)
+- A third hotkey opens the last saved clip (default `Ctrl+Alt+F11`)
 - Hotkeys are recorded by pressing them (key plus optional Ctrl, Alt, Shift, Win), duplicate combinations are rejected
 - Clear error message when a combination is already taken by another application
 - Screen selection in a dropdown with monitor name, resolution and a primary monitor marker, the capture restarts on change
 - Output folder via the native folder dialog, default is `Videos\Clips`, created when needed
-- Windows toast after saving ("Clip gespeichert" with the file name) and on errors
-- Small on-screen notification at the bottom left of the recorded monitor (green for saved, red for failed), it never takes focus and is excluded from screen capture, so it does not appear in clips
+- Windows toast after saving ("Clip gespeichert" with the file name) and on errors, a click on the toast opens the clip
+- Small on-screen notification at the bottom left of the recorded monitor (green for saved, red for failed), a click on it opens the clip, it never takes focus and is excluded from screen capture, so it does not appear in clips
 - If the buffer is too short, everything available is saved and the notification says so
 - File name: `clip_YYYY-MM-DD_HH-MM-SS_<hotkey number>.mp4`
 - Capture via FFmpeg with `ddagrab` (Desktop Duplication), no screenshot loops in Rust
 - Encoder order: `h264_nvenc`, then `h264_qsv`, then `h264_amf`, fallback `libx264` with preset `ultrafast`
 - Rolling buffer of 1-second segments, clips are joined with the concat demuxer without re-encoding (`-c copy`)
-- Configurable: frame rate, clip resolution from 480p up to 2160p (4K), quality, FFmpeg path
+- Configurable: frame rate, clip resolution from 480p up to 2160p (4K), quality (the high setting uses a high bitrate and adaptive quantization to avoid blocks in dark areas), FFmpeg path
+- Optional short sound when a clip was saved or failed, it is audible in fullscreen games, too
 - Never upscales: 4K records at full size only on a 4K screen
 - Installer (`DeuClip_Setup.exe`) in German and English that downloads FFmpeg when it is missing
 - Configuration as JSON in `%APPDATA%\DeuClip\config.json`, file log in `%APPDATA%\DeuClip\deuclip.log`
@@ -33,6 +35,8 @@ DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of you
 - Recovers from capture interruptions (for example `DXGI_ERROR_ACCESS_LOST` when a fullscreen app takes over the screen): FFmpeg is restarted automatically, the buffer is kept and clips can still be saved meanwhile
 - FFmpeg runs without a console window and is terminated even if DeuClip crashes (job object)
 - The GUI never blocks: capture, saving, dialogs and notifications run in their own threads
+
+Notifications cannot be drawn over games in exclusive fullscreen mode. Use borderless windowed mode, or rely on the sound and the hotkey to open the last clip.
 
 The user interface of the app is in German.
 
@@ -126,6 +130,7 @@ DeuClip/
     ├── notify.rs           Windows toasts
     ├── overlay.rs          On-screen notification at the bottom left
     ├── autostart.rs        Autostart via the registry
+    ├── lastclip.rs         Last saved clip, opening it
     ├── tray.rs             Tray icon and menu
     ├── instance.rs         Single instance, shows the window on a second start
     └── logging.rs          File logger

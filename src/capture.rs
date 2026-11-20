@@ -464,10 +464,15 @@ fn build_args(s: &Settings, cand: Candidate, dir: &Path, start_number: u32) -> V
         }
     };
     match cand.enc {
-        Enc::Nvenc => push(&[
-            "-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr", "-cq", &q, "-b:v", "0",
-            "-maxrate", "100M", "-bufsize", "200M",
-        ]),
+        Enc::Nvenc => {
+            // Spatial AQ spends more bits on dark and flat areas, where blocks show up first.
+            let preset = if s.quality == Quality::High { "p5" } else { "p4" };
+            push(&[
+                "-c:v", "h264_nvenc", "-preset", preset, "-tune", "hq", "-rc", "vbr", "-cq", &q,
+                "-b:v", "0", "-maxrate", "100M", "-bufsize", "200M", "-spatial-aq", "1",
+                "-aq-strength", "8",
+            ]);
+        }
         Enc::Qsv => push(&[
             "-c:v", "h264_qsv", "-preset", "veryfast", "-global_quality", &q,
         ]),
@@ -475,9 +480,12 @@ fn build_args(s: &Settings, cand: Candidate, dir: &Path, start_number: u32) -> V
             "-c:v", "h264_amf", "-quality", "speed", "-rc", "cqp", "-qp_i", &q, "-qp_p", &q,
             "-qp_b", &q,
         ]),
-        Enc::X264 => push(&[
-            "-c:v", "libx264", "-preset", "ultrafast", "-crf", &q, "-sc_threshold", "0",
-        ]),
+        Enc::X264 => {
+            let preset = if s.quality == Quality::High { "superfast" } else { "ultrafast" };
+            push(&[
+                "-c:v", "libx264", "-preset", preset, "-crf", &q, "-aq-mode", "3", "-sc_threshold", "0",
+            ]);
+        }
     }
     let gop = fps.to_string();
     push(&["-g", &gop, "-bf", "0", "-an"]);
