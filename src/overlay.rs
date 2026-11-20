@@ -4,7 +4,7 @@
 //! It runs in its own thread, so it also works while the main window is hidden in the
 //! tray, and it is excluded from screen capture so it never ends up in a clip.
 
-use std::sync::atomic::{AtomicIsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicIsize, Ordering};
 use std::sync::Mutex;
 use windows::core::w;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -55,6 +55,8 @@ static STATE: Mutex<State> = Mutex::new(State {
 /// A point on the screen that should show the notification (center of the recorded monitor).
 static ANCHOR: Mutex<Option<(i32, i32)>> = Mutex::new(None);
 static HWND_RAW: AtomicIsize = AtomicIsize::new(0);
+/// A notification that arrived before the window existed.
+static PENDING: AtomicBool = AtomicBool::new(false);
 
 fn rgb(c: (u8, u8, u8)) -> COLORREF {
     COLORREF(c.0 as u32 | (c.1 as u32) << 8 | (c.2 as u32) << 16)
@@ -93,6 +95,8 @@ pub fn show(ok: bool, title: &str, detail: &str) {
         unsafe {
             let _ = PostMessageW(Some(HWND(raw as *mut _)), WM_APP, WPARAM(0), LPARAM(0));
         }
+    } else {
+        PENDING.store(true, Ordering::SeqCst);
     }
 }
 
@@ -141,6 +145,9 @@ unsafe fn run() {
         let _ = SetWindowDisplayAffinity(hwnd, WDA_EXCLUDEFROMCAPTURE);
     }
     HWND_RAW.store(hwnd.0 as isize, Ordering::SeqCst);
+    if PENDING.swap(false, Ordering::SeqCst) {
+        let _ = PostMessageW(Some(hwnd), WM_APP, WPARAM(0), LPARAM(0));
+    }
 
     let mut msg = MSG::default();
     while GetMessageW(&mut msg, None, 0, 0).0 > 0 {

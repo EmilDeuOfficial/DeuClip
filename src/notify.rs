@@ -38,6 +38,17 @@ pub fn info(title: &str, message: &str) {
     show(title.to_string(), message.to_string(), None);
 }
 
+/// Problems found while starting (e.g. with Windows): FFmpeg missing, hotkey taken, ...
+pub fn startup_problems(problems: &[String]) {
+    let Some(first) = problems.first() else { return };
+    let rest = if problems.len() > 1 {
+        Some(problems[1..].join(" "))
+    } else {
+        None
+    };
+    show("DeuClip: Problem beim Start".to_string(), first.clone(), rest);
+}
+
 pub fn error(message: &str) {
     show(
         "DeuClip: Fehler".to_string(),

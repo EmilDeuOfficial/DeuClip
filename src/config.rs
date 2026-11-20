@@ -135,21 +135,27 @@ pub fn default_output_dir() -> PathBuf {
 
 impl Config {
     /// Loads the configuration. A missing or broken file yields the defaults.
-    pub fn load() -> Self {
+    /// The second value is a warning for the user when the file was broken.
+    pub fn load() -> (Self, Option<String>) {
         let path = config_path();
+        let mut warning = None;
         let mut cfg = match fs::read_to_string(&path) {
             // Editors such as Notepad write a BOM that serde_json does not accept.
             Ok(text) => match serde_json::from_str::<Config>(text.trim_start_matches('\u{feff}')) {
                 Ok(c) => c,
                 Err(e) => {
                     log::error!("config.json is invalid, using the defaults: {e}");
+                    warning = Some(
+                        "Die Datei config.json ist ungültig. Es werden die Standardeinstellungen genutzt."
+                            .to_string(),
+                    );
                     Config::default()
                 }
             },
             Err(_) => Config::default(),
         };
         cfg.sanitize();
-        cfg
+        (cfg, warning)
     }
 
     /// Clamps values into valid ranges.

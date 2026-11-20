@@ -851,18 +851,27 @@ impl Manager {
         self.working = None;
         self.settings = Some(s.clone());
         self.state(RecState::Starting);
-        if let Err(msg) = self.begin(&s, false) {
+        if let Err((msg, fatal)) = self.begin(&s, false) {
             log::error!("{msg}");
-            self.want_running = false;
-            self.state(RecState::Error(msg));
+            if fatal {
+                self.want_running = false;
+                self.state(RecState::Error(msg));
+            } else {
+                // E.g. right after logging in, the graphics stack may not be ready yet.
+                self.schedule_restart(msg);
+            }
         }
     }
 
     /// Starts FFmpeg. With `resume` the existing buffer is kept and the numbering continues.
-    fn begin(&mut self, s: &Settings, resume: bool) -> Result<(), String> {
+    /// The error carries a flag: true when retrying makes no sense.
+    fn begin(&mut self, s: &Settings, resume: bool) -> Result<(), (String, bool)> {
         let probe = probe(&s.ffmpeg);
         if !probe.ddagrab {
-            return Err("Diese FFmpeg-Version enthaelt den Filter ddagrab nicht. Bitte ein aktuelles Windows-Build (ab Version 6.0) verwenden.".to_string());
+            return Err((
+                "Diese FFmpeg-Version enthaelt den Filter ddagrab nicht. Bitte ein aktuelles Windows-Build (ab Version 6.0) verwenden.".to_string(),
+                true,
+            ));
         }
 
         let dir = match (&self.buffer_dir, resume) {
@@ -871,7 +880,7 @@ impl Manager {
                 let d = temp_root().join(format!("buf_{}", std::process::id()));
                 let _ = fs::remove_dir_all(&d);
                 fs::create_dir_all(&d)
-                    .map_err(|e| format!("Temporaerer Ordner nicht anlegbar: {e}"))?;
+                    .map_err(|e| (format!("Temporaerer Ordner nicht anlegbar: {e}"), false))?;
                 d
             }
         };
@@ -945,7 +954,7 @@ impl Manager {
         if !resume {
             let _ = fs::remove_dir_all(&dir);
         }
-        Err(format!("Aufnahme konnte nicht gestartet werden: {last_error}"))
+        Err((format!("Aufnahme konnte nicht gestartet werden: {last_error}"), false))
     }
 
     /// FFmpeg ended or stalled (e.g. DXGI_ERROR_ACCESS_LOST when a fullscreen app takes
@@ -984,7 +993,7 @@ impl Manager {
         }
         match self.begin(&settings, true) {
             Ok(()) => log::info!("Capture resumed after {} attempt(s)", self.restart_attempts),
-            Err(msg) => self.schedule_restart(msg),
+            Err((msg, _)) => self.schedule_restart(msg),
         }
     }
 

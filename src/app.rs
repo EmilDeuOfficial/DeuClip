@@ -56,9 +56,16 @@ impl DeuClipApp {
         theme::apply(&cc.egui_ctx);
         overlay::init();
 
-        let mut cfg = Config::load();
+        let (mut cfg, cfg_warning) = Config::load();
+        // Problems found while starting, reported when DeuClip starts hidden (autostart).
+        let mut problems: Vec<String> = Vec::new();
+        problems.extend(cfg_warning);
         let monitors = capture::list_monitors();
         if !monitors.iter().any(|m| m.index == cfg.monitor_index) {
+            problems.push(
+                "Der gespeicherte Bildschirm wurde nicht gefunden. Es wird der Hauptbildschirm genutzt."
+                    .to_string(),
+            );
             cfg.monitor_index = monitors
                 .iter()
                 .find(|m| m.primary)
@@ -76,6 +83,7 @@ impl DeuClipApp {
         let spawned = std::thread::Builder::new()
             .name("deuclip-dispatch".into())
             .spawn(move || {
+                let mut had_error = false;
                 for ev in ev_rx {
                     match &ev {
                         Event::Saved {
@@ -101,7 +109,18 @@ impl DeuClipApp {
                             notify::error(message);
                             overlay::show(false, "Clip nicht gespeichert", message);
                         }
-                        Event::State(RecState::Error(message)) => notify::error(message),
+                        Event::State(RecState::Error(message)) => {
+                            had_error = true;
+                            notify::error(message);
+                            overlay::show(false, "Aufnahme-Problem", message);
+                        }
+                        Event::State(RecState::Running { .. }) => {
+                            if had_error {
+                                had_error = false;
+                                notify::info("DeuClip", "Die Aufnahme läuft wieder.");
+                                overlay::show(true, "Aufnahme läuft wieder", "");
+                            }
+                        }
                         Event::State(_) => {}
                     }
                     if ui_tx.send(ev).is_err() {
@@ -170,6 +189,32 @@ impl DeuClipApp {
         app.apply_hotkey(0);
         app.apply_hotkey(1);
         app.commit();
+
+        if app.ffmpeg.is_none() {
+            problems.push(
+                "FFmpeg wurde nicht gefunden. Lege ffmpeg.exe neben DeuClip.exe oder wähle den Pfad im Fenster."
+                    .to_string(),
+            );
+        }
+        for slot in 0..2 {
+            if let Some(e) = &app.hk_err[slot] {
+                problems.push(format!("Hotkey {}: {}", slot + 1, e));
+            }
+        }
+        if let Some(e) = &app.hotkeys.init_error {
+            problems.push(e.clone());
+        }
+        if app.tray.is_none() {
+            problems.push(
+                "Das Tray-Symbol konnte nicht erstellt werden. DeuClip bleibt als Fenster sichtbar."
+                    .to_string(),
+            );
+        }
+        if background && !problems.is_empty() {
+            log::warn!("Problems at startup: {}", problems.join(" | "));
+            notify::startup_problems(&problems);
+            overlay::show(false, "Problem beim Start", &problems[0]);
+        }
         app
     }
 
