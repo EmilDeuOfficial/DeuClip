@@ -22,11 +22,16 @@ DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of you
 - Capture via FFmpeg with `ddagrab` (Desktop Duplication), no screenshot loops in Rust
 - Encoder order: `h264_nvenc`, then `h264_qsv`, then `h264_amf`, fallback `libx264` with preset `ultrafast`
 - Rolling buffer of 1-second segments, clips are joined with the concat demuxer without re-encoding (`-c copy`)
+- The buffer only keeps the longest clip length plus 10 seconds in the temp folder (70 seconds with the default 30 s and 60 s), older segments are deleted every 2 seconds and everything is removed on exit, so nothing piles up on the disk when you do not save a clip
+- Records the system sound (everything that plays on the default output device) and optionally the microphone via WASAPI, encoded as AAC into the same segments, so audio needs no extra disk space
 - Configurable: frame rate, clip resolution from 480p up to 2160p (4K), quality (the high setting uses a high bitrate and adaptive quantization to avoid blocks in dark areas), FFmpeg path
 - Optional short sound when a clip was saved or failed, it is audible in fullscreen games, too
 - Never upscales: 4K records at full size only on a 4K screen
 - Installer (`DeuClip_Setup.exe`) in German and English that downloads FFmpeg when it is missing
 - Configuration as JSON in `%APPDATA%\DeuClip\config.json`, file log in `%APPDATA%\DeuClip\deuclip.log`
+- Pause and resume the capture from the window or the tray menu, clips can still be saved from the buffer while paused
+- Tray menu: open DeuClip, save a clip (both lengths), open the last clip, open the clips folder, pause or resume, exit
+- Update check: DeuClip looks for a newer release on GitHub shortly after the start and every 6 hours (can be turned off), a banner offers to download and install it, the installer then starts DeuClip again. The check uses the `curl.exe` that ships with Windows and sends no personal data
 - Runs in the background: closing the window hides DeuClip in the tray, recording and hotkeys keep working, "Beenden" in the tray menu (or in the window) exits
 - Optional autostart with Windows via the registry Run key, DeuClip then starts hidden in the tray (`--background`)
 - Problems while starting hidden (for example with Windows) are reported: a toast and the on-screen notification tell you when FFmpeg is missing, a hotkey is already taken, the configuration is broken or the capture cannot start. A failed first capture start is retried automatically and you are told when it works again
@@ -124,11 +129,13 @@ DeuClip/
     ├── main.rs             Entry point, window
     ├── app.rs              GUI and wiring of engine, hotkeys and configuration
     ├── theme.rs            Colors, font and widgets
+    ├── updater.rs          Update check and download via GitHub releases
     ├── capture.rs          FFmpeg capture, segment buffer, saving clips, monitor list
     ├── hotkeys.rs          Global hotkeys
     ├── config.rs           config.json
     ├── notify.rs           Windows toasts
     ├── overlay.rs          On-screen notification at the bottom left
+    ├── audio.rs            Audio capture (WASAPI) streamed to FFmpeg
     ├── autostart.rs        Autostart via the registry
     ├── lastclip.rs         Last saved clip, opening it
     ├── tray.rs             Tray icon and menu

@@ -1,6 +1,7 @@
 ﻿#![windows_subsystem = "windows"]
 
 mod app;
+mod audio;
 mod autostart;
 mod capture;
 mod config;
@@ -12,6 +13,7 @@ mod notify;
 mod overlay;
 mod theme;
 mod tray;
+mod updater;
 
 use eframe::egui;
 

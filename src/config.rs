@@ -98,6 +98,12 @@ pub struct Config {
     pub ffmpeg_path: String,
     /// Short sound when a clip was saved or failed (audible in fullscreen games, too).
     pub sound: bool,
+    /// Record the system sound (everything that plays on the default output device).
+    pub audio_system: bool,
+    /// Record the default microphone.
+    pub audio_mic: bool,
+    /// Look for a newer release on GitHub now and then.
+    pub check_updates: bool,
 }
 
 impl Default for Config {
@@ -115,6 +121,9 @@ impl Default for Config {
             scale_height: 0,
             ffmpeg_path: String::new(),
             sound: true,
+            audio_system: true,
+            audio_mic: false,
+            check_updates: true,
         }
     }
 }

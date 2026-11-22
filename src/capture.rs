@@ -4,6 +4,7 @@
 //! folder. On a hotkey the latest segments are joined into an MP4 with the concat
 //! demuxer, without re-encoding.
 
+use crate::audio::{AudioFormat, AudioHandle, Source};
 use crate::config::Quality;
 use std::collections::VecDeque;
 use std::fs;
@@ -84,6 +85,8 @@ pub struct Settings {
     pub fps: u32,
     pub scale_height: u32,
     pub quality: Quality,
+    pub audio_system: bool,
+    pub audio_mic: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -92,6 +95,8 @@ pub enum RecState {
     Starting,
     /// FFmpeg was interrupted (e.g. desktop duplication lost), a new attempt is running.
     Reconnecting,
+    /// The user paused the capture. The buffer stays and clips can still be saved from it.
+    Paused,
     Running { encoder: String },
     Error(String),
 }
@@ -100,6 +105,9 @@ pub enum Command {
     /// Start (or restart) the capture.
     Start(Settings),
     Stop,
+    /// Pause the capture without losing the buffer.
+    Pause,
+    Resume,
     /// Update the output folder and the retention time.
     Configure {
         output_dir: PathBuf,
@@ -114,6 +122,8 @@ pub enum Command {
 
 pub enum Event {
     State(RecState),
+    /// A problem that does not stop the capture (e.g. the microphone is blocked).
+    Notice(String),
     Saved {
         slot: usize,
         path: PathBuf,
@@ -431,7 +441,13 @@ fn candidates(p: &Probe, scaled: bool) -> Vec<Candidate> {
     list
 }
 
-fn build_args(s: &Settings, cand: Candidate, dir: &Path, start_number: u32) -> Vec<String> {
+fn build_args(
+    s: &Settings,
+    cand: Candidate,
+    dir: &Path,
+    start_number: u32,
+    audio: &[(AudioFormat, u16)],
+) -> Vec<String> {
     let q = s.quality.value().to_string();
     let fps = s.fps.max(1);
     let mut a: Vec<String> = Vec::new();
@@ -446,6 +462,28 @@ fn build_args(s: &Settings, cand: Candidate, dir: &Path, start_number: u32) -> V
         s.monitor_index, fps
     );
     a.push(source);
+
+    // Audio inputs: raw samples that this process streams over a local TCP connection.
+    for (format, port) in audio {
+        for item in [
+            "-thread_queue_size".to_string(),
+            "1024".to_string(),
+            "-probesize".to_string(),
+            "32".to_string(),
+            "-analyzeduration".to_string(),
+            "0".to_string(),
+            "-f".to_string(),
+            format.ffmpeg.to_string(),
+            "-ar".to_string(),
+            format.rate.to_string(),
+            "-ac".to_string(),
+            format.channels.to_string(),
+            "-i".to_string(),
+            format!("tcp://127.0.0.1:{port}"),
+        ] {
+            a.push(item);
+        }
+    }
 
     if !cand.direct {
         let scale = if s.scale_height > 0 {
@@ -488,7 +526,16 @@ fn build_args(s: &Settings, cand: Candidate, dir: &Path, start_number: u32) -> V
         }
     }
     let gop = fps.to_string();
-    push(&["-g", &gop, "-bf", "0", "-an"]);
+    push(&["-g", &gop, "-bf", "0"]);
+    match audio.len() {
+        0 => push(&["-an"]),
+        1 => push(&["-map", "0:v", "-map", "1:a", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2"]),
+        _ => push(&[
+            "-filter_complex",
+            "[1:a][2:a]amix=inputs=2:duration=longest:normalize=0[aout]",
+            "-map", "0:v", "-map", "[aout]", "-c:a", "aac", "-b:a", "160k", "-ar", "48000", "-ac", "2",
+        ]),
+    }
     push(&[
         "-f", "segment", "-segment_time", "1", "-segment_format", "mpegts",
         "-reset_timestamps", "1",
@@ -511,6 +558,7 @@ struct Recorder {
     started: Instant,
     empty_warned: bool,
     tail: Arc<Mutex<VecDeque<String>>>,
+    audio: Vec<AudioHandle>,
 }
 
 impl Recorder {
@@ -535,6 +583,9 @@ impl Recorder {
                     break;
                 }
             }
+        }
+        for audio in self.audio.drain(..) {
+            audio.stop();
         }
         if remove_dir {
             let _ = fs::remove_dir_all(&self.dir);
@@ -588,6 +639,7 @@ fn spawn_ffmpeg(ffmpeg: &Path, args: &[String], dir: &Path, encoder: &str) -> Re
         started: Instant::now(),
         empty_warned: false,
         tail,
+        audio: Vec::new(),
     })
 }
 
@@ -692,7 +744,7 @@ fn save_clip(
     let output = proc(ffmpeg)
         .args(["-y", "-hide_banner", "-loglevel", "error", "-f", "concat", "-safe", "0", "-i"])
         .arg(&list_path)
-        .args(["-c", "copy", "-movflags", "+faststart"])
+        .args(["-c", "copy", "-bsf:a", "aac_adtstoasc", "-movflags", "+faststart"])
         .arg(&out)
         .stdin(Stdio::null())
         .stdout(Stdio::null())
@@ -748,6 +800,8 @@ impl Engine {
                     next_restart: None,
                     restart_attempts: 0,
                     error_reported: false,
+                    audio_notice_sent: false,
+                    paused: false,
                 };
                 mgr.run();
             })
@@ -791,6 +845,8 @@ struct Manager {
     next_restart: Option<Instant>,
     restart_attempts: u32,
     error_reported: bool,
+    audio_notice_sent: bool,
+    paused: bool,
 }
 
 impl Manager {
@@ -809,8 +865,11 @@ impl Manager {
         loop {
             match self.rx.recv_timeout(Duration::from_millis(500)) {
                 Ok(Command::Start(s)) => self.start(s),
+                Ok(Command::Pause) => self.pause(),
+                Ok(Command::Resume) => self.resume(),
                 Ok(Command::Stop) => {
                     self.want_running = false;
+                    self.paused = false;
                     self.next_restart = None;
                     self.stop_recording();
                     self.state(RecState::Stopped);
@@ -850,11 +909,55 @@ impl Manager {
         }
     }
 
-    fn start(&mut self, s: Settings) {
-        self.stop_recording();
+    /// Stops FFmpeg but keeps the buffer, no automatic restart.
+    fn pause(&mut self) {
+        if self.settings.is_none() || self.paused {
+            return;
+        }
+        self.paused = true;
+        self.want_running = false;
+        self.next_restart = None;
+        if let Some(rec) = self.rec.take() {
+            rec.stop(false);
+        }
+        log::info!("Capture paused");
+        self.state(RecState::Paused);
+    }
+
+    fn resume(&mut self) {
+        let Some(s) = self.settings.clone() else { return };
+        if !self.paused {
+            return;
+        }
+        self.paused = false;
         self.want_running = true;
         self.restart_attempts = 0;
         self.error_reported = false;
+        log::info!("Capture resumed by the user");
+        self.state(RecState::Starting);
+        if let Err((msg, fatal)) = self.begin(&s, true) {
+            log::error!("{msg}");
+            if fatal {
+                self.want_running = false;
+                self.state(RecState::Error(msg));
+            } else {
+                self.schedule_restart(msg);
+            }
+        }
+    }
+
+    fn start(&mut self, s: Settings) {
+        self.stop_recording();
+        if self.paused {
+            // New settings while paused: they apply when the capture is resumed.
+            self.settings = Some(s);
+            self.state(RecState::Paused);
+            return;
+        }
+        self.want_running = true;
+        self.restart_attempts = 0;
+        self.error_reported = false;
+        self.audio_notice_sent = false;
         self.next_restart = None;
         self.working = None;
         self.settings = Some(s.clone());
@@ -911,8 +1014,11 @@ impl Manager {
             } else {
                 cand.enc.name().to_string()
             };
-            let args = build_args(s, cand, &dir, start_number);
-            log::info!("Starting FFmpeg with {label}");
+            let audio = self.open_audio(s);
+            let specs: Vec<(AudioFormat, u16)> =
+                audio.iter().map(|a| (a.format.clone(), a.port)).collect();
+            let args = build_args(s, cand, &dir, start_number, &specs);
+            log::info!("Starting FFmpeg with {label} ({} audio source(s))", specs.len());
             let mut rec = match spawn_ffmpeg(&s.ffmpeg, &args, &dir, &label) {
                 Ok(r) => r,
                 Err(e) => {
@@ -921,6 +1027,11 @@ impl Manager {
                     break;
                 }
             };
+            let first_segment = dir.join(format!("seg_{start_number:08}.ts"));
+            for a in &audio {
+                a.go(first_segment.clone());
+            }
+            rec.audio = audio;
             if let Some(job) = &self.job {
                 assign_to_job(job, &rec.child);
             }
@@ -963,6 +1074,31 @@ impl Manager {
             let _ = fs::remove_dir_all(&dir);
         }
         Err((format!("Aufnahme konnte nicht gestartet werden: {last_error}"), false))
+    }
+
+    /// Opens the wanted audio sources. A source that cannot be opened is skipped and reported once.
+    fn open_audio(&mut self, s: &Settings) -> Vec<AudioHandle> {
+        let mut wanted = Vec::new();
+        if s.audio_system {
+            wanted.push(Source::System);
+        }
+        if s.audio_mic {
+            wanted.push(Source::Microphone);
+        }
+        let mut handles = Vec::new();
+        for source in wanted {
+            match AudioHandle::start(source) {
+                Ok(h) => handles.push(h),
+                Err(e) => {
+                    log::warn!("Audio source unavailable: {e}");
+                    if !self.audio_notice_sent {
+                        self.audio_notice_sent = true;
+                        self.emit(Event::Notice(format!("{e} Die Aufnahme läuft ohne diese Tonquelle.")));
+                    }
+                }
+            }
+        }
+        handles
     }
 
     /// FFmpeg ended or stalled (e.g. DXGI_ERROR_ACCESS_LOST when a fullscreen app takes

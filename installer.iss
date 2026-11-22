@@ -55,11 +55,13 @@ english.FFmpegDownloadDesc=DeuClip needs FFmpeg to record. The setup downloads i
 english.FFmpegMemo=FFmpeg: will be downloaded automatically
 english.FFmpegFailed=FFmpeg could not be installed automatically.%nPlease place ffmpeg.exe next to DeuClip.exe or in your PATH after setup.%nDownload: https://ffmpeg.org/download.html
 english.FFmpegInstalling=Installing FFmpeg...
+english.CloseApp=DeuClip is running and will be closed for the installation. Continue?
 german.FFmpegDownloadTitle=FFmpeg wird heruntergeladen
 german.FFmpegDownloadDesc=DeuClip braucht FFmpeg für die Aufnahme. Das Setup lädt es einmalig herunter (ca. 190 MB).
 german.FFmpegMemo=FFmpeg: wird automatisch heruntergeladen
 german.FFmpegFailed=FFmpeg konnte nicht automatisch installiert werden.%nBitte lege ffmpeg.exe nach dem Setup neben DeuClip.exe oder nimm es in den PATH auf.%nDownload: https://ffmpeg.org/download.html
 german.FFmpegInstalling=FFmpeg wird installiert...
+german.CloseApp=DeuClip läuft und wird für die Installation beendet. Fortfahren?
 
 [Tasks]
 Name: "desktopicon"; Description: "{cm:CreateDesktopIcon}"; GroupDescription: "{cm:AdditionalIcons}"
@@ -78,11 +80,66 @@ Name: "{autodesktop}\{#MyAppName}";     Filename: "{app}\{#MyAppExeName}"; Tasks
 
 [Run]
 Filename: "{app}\{#MyAppExeName}"; Description: "{cm:LaunchProgram,{#StringChange(MyAppName, '&', '&&')}}"; Flags: nowait postinstall skipifsilent
+; The in-app updater runs this setup silently with /RESTARTAPP=1 and expects DeuClip to start again.
+Filename: "{app}\{#MyAppExeName}"; Flags: nowait runasoriginaluser; Check: RestartAfterUpdate
 
 [Code]
 var
   DownloadPage: TDownloadWizardPage;
   FFmpegDownloaded: Boolean;
+
+function RestartAfterUpdate(): Boolean;
+begin
+  Result := WizardSilent() and (ExpandConstant('{param:RESTARTAPP|0}') = '1');
+end;
+
+function AppRunning(): Boolean;
+var
+  ResultCode: Integer;
+begin
+  Result := Exec(
+    ExpandConstant('{cmd}'),
+    '/c tasklist /FI "IMAGENAME eq {#MyAppExeName}" /NH | find /I "{#MyAppExeName}" >nul',
+    '', SW_HIDE, ewWaitUntilTerminated, ResultCode
+  ) and (ResultCode = 0);
+end;
+
+procedure KillApp();
+var
+  ResultCode: Integer;
+begin
+  Exec(ExpandConstant('{cmd}'), '/c taskkill /F /T /IM {#MyAppExeName} >nul 2>&1', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+  Sleep(1000);
+end;
+
+// The in-app updater starts this setup while DeuClip is still shutting down:
+// wait for it to end and stop it if it takes too long.
+procedure StopRunningApp();
+var
+  I: Integer;
+begin
+  for I := 1 to 20 do begin
+    if not AppRunning() then
+      Exit;
+    Sleep(500);
+  end;
+  Log('{#MyAppExeName} is still running after 10 seconds, stopping it');
+  KillApp();
+end;
+
+// DeuClip keeps running in the tray when its window is closed, so the setup stops it itself.
+function InitializeSetup(): Boolean;
+begin
+  Result := True;
+  if RestartAfterUpdate() then
+    StopRunningApp()
+  else if AppRunning() then begin
+    if SuppressibleMsgBox(CustomMessage('CloseApp'), mbConfirmation, MB_YESNO, IDYES) = IDYES then
+      KillApp()
+    else
+      Result := False;
+  end;
+end;
 
 function FFmpegInPath(): Boolean;
 var
@@ -165,6 +222,8 @@ end;
 
 procedure CurUninstallStepChanged(CurUninstallStep: TUninstallStep);
 begin
+  if CurUninstallStep = usUninstall then
+    KillApp();
   if CurUninstallStep = usPostUninstall then begin
     // Remove the autostart entry of the app
     RegDeleteValue(HKCU, 'Software\Microsoft\Windows\CurrentVersion\Run', 'DeuClip');

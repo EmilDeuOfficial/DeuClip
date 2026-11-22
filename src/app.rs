@@ -5,13 +5,17 @@ use crate::config::{Config, HotkeySpec, Quality, MAX_DURATION, MIN_DURATION};
 use crate::hotkeys::{self, HotkeyService};
 use crate::instance::Instance;
 use crate::tray::{Tray, TrayAction};
+use crate::updater::{self, Release};
 use crate::{autostart, lastclip, notify, overlay, theme};
 use eframe::egui::{
     self, vec2, Align, Button, CornerRadius, Frame, Label, Layout, Margin, RichText, Stroke,
     TextEdit,
 };
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{channel, Receiver, Sender};
+use std::sync::Arc;
+use std::time::Duration;
 
 enum Picked {
     Folder(PathBuf),
@@ -19,7 +23,25 @@ enum Picked {
     Cancelled,
 }
 
-type CaptureKey = (Option<PathBuf>, u32, u32, u32, Quality);
+enum UpdateMsg {
+    Checked {
+        result: Result<Option<Release>, String>,
+        /// Started by the user: errors are shown.
+        manual: bool,
+    },
+    Downloaded(Result<PathBuf, String>),
+}
+
+enum UpdateState {
+    Idle,
+    Checking,
+    UpToDate,
+    Available(Release),
+    Downloading(Release),
+    Failed(String),
+}
+
+type CaptureKey = (Option<PathBuf>, u32, u32, u32, Quality, bool, bool);
 
 pub struct DeuClipApp {
     cfg: Config,
@@ -46,6 +68,14 @@ pub struct DeuClipApp {
     /// true once the user chose to quit: closing the window then really exits.
     quitting: bool,
     hide_notice_shown: bool,
+    /// Last texts given to the tray menu: clip lengths and pause state.
+    tray_labels: (u32, u32, bool),
+    update: UpdateState,
+    update_tx: Sender<UpdateMsg>,
+    update_rx: Receiver<UpdateMsg>,
+    /// Version the user was already told about by a notification.
+    update_notified: Option<String>,
+    updates_on: Arc<AtomicBool>,
     /// Number of frames in which the window must still be hidden after an autostart.
     hide_frames_left: u8,
     _instance: Instance,
@@ -84,6 +114,7 @@ impl DeuClipApp {
             .name("deuclip-dispatch".into())
             .spawn(move || {
                 let mut had_error = false;
+                let mut was_paused = false;
                 for ev in ev_rx {
                     match &ev {
                         Event::Saved {
@@ -112,16 +143,27 @@ impl DeuClipApp {
                             overlay::show(false, "Clip nicht gespeichert", message);
                             notify::beep(false);
                         }
+                        Event::Notice(message) => {
+                            overlay::show(false, "Ton nicht verfügbar", message);
+                        }
                         Event::State(RecState::Error(message)) => {
                             had_error = true;
                             notify::error(message);
                             overlay::show(false, "Aufnahme-Problem", message);
                         }
+                        Event::State(RecState::Paused) => {
+                            was_paused = true;
+                            overlay::show(true, "Aufnahme pausiert", "Fortsetzen im Tray-Menü.");
+                        }
                         Event::State(RecState::Running { .. }) => {
                             if had_error {
                                 had_error = false;
+                                was_paused = false;
                                 notify::info("DeuClip", "Die Aufnahme läuft wieder.");
                                 overlay::show(true, "Aufnahme läuft wieder", "");
+                            } else if was_paused {
+                                was_paused = false;
+                                overlay::show(true, "Aufnahme fortgesetzt", "");
                             }
                         }
                         Event::State(_) => {}
@@ -163,6 +205,31 @@ impl DeuClipApp {
         }
         autostart::refresh();
 
+        // Background update check: shortly after the start, then every 6 hours.
+        let (update_tx, update_rx) = channel::<UpdateMsg>();
+        let updates_on = Arc::new(AtomicBool::new(cfg.check_updates));
+        {
+            let tx = update_tx.clone();
+            let ctx = cc.egui_ctx.clone();
+            let on = Arc::clone(&updates_on);
+            let spawned = std::thread::Builder::new()
+                .name("deuclip-update".into())
+                .spawn(move || {
+                    std::thread::sleep(Duration::from_secs(25));
+                    loop {
+                        if on.load(Ordering::Relaxed) {
+                            let result = updater::check();
+                            let _ = tx.send(UpdateMsg::Checked { result, manual: false });
+                            ctx.request_repaint();
+                        }
+                        std::thread::sleep(Duration::from_secs(6 * 3600));
+                    }
+                });
+            if let Err(e) = spawned {
+                log::warn!("Could not start the update thread: {e}");
+            }
+        }
+
         let mut app = Self {
             dur_text: [cfg.duration1.to_string(), cfg.duration2.to_string()],
             cfg,
@@ -186,6 +253,12 @@ impl DeuClipApp {
             tray_rx,
             quitting: false,
             hide_notice_shown: false,
+            tray_labels: (0, 0, false),
+            update: UpdateState::Idle,
+            update_tx,
+            update_rx,
+            update_notified: None,
+            updates_on,
             hide_frames_left: if background && tray_ok { 4 } else { 0 },
             _instance: instance,
         };
@@ -272,6 +345,7 @@ impl DeuClipApp {
         self.hotkeys
             .set_durations([self.cfg.duration1, self.cfg.duration2]);
         notify::set_sound(self.cfg.sound);
+        self.updates_on.store(self.cfg.check_updates, Ordering::Relaxed);
         lastclip::set_output_dir(self.cfg.output_path());
         let retention = self.cfg.duration1.max(self.cfg.duration2) as u64 + capture::RESERVE_SECS;
         self.engine.send(Command::Configure {
@@ -291,6 +365,8 @@ impl DeuClipApp {
             self.cfg.fps,
             self.cfg.scale_height,
             self.cfg.quality,
+            self.cfg.audio_system,
+            self.cfg.audio_mic,
         );
         if self.applied_key.as_ref() != Some(&key) {
             self.applied_key = Some(key);
@@ -319,6 +395,8 @@ impl DeuClipApp {
                     fps: self.cfg.fps,
                     scale_height,
                     quality: self.cfg.quality,
+                    audio_system: self.cfg.audio_system,
+                    audio_mic: self.cfg.audio_mic,
                 }));
             }
             None => {
@@ -332,6 +410,7 @@ impl DeuClipApp {
         while let Ok(ev) = self.ui_rx.try_recv() {
             match ev {
                 Event::State(s) => self.rec_state = s,
+                Event::Notice(m) => self.info = Some((m, true)),
                 Event::Saved {
                     slot,
                     path,
@@ -354,6 +433,46 @@ impl DeuClipApp {
                 Event::SaveFailed { slot, message } => {
                     self.info = Some((format!("Hotkey {}: {message}", slot + 1), true))
                 }
+            }
+        }
+        while let Ok(m) = self.update_rx.try_recv() {
+            match m {
+                UpdateMsg::Checked { result, manual } => match result {
+                    Ok(Some(release)) => {
+                        if !manual && self.update_notified.as_deref() != Some(release.version.as_str()) {
+                            self.update_notified = Some(release.version.clone());
+                            notify::info(
+                                "DeuClip: Update verfügbar",
+                                &format!(
+                                    "Version {} ist verfügbar. Öffne das Fenster zum Aktualisieren.",
+                                    release.version
+                                ),
+                            );
+                        }
+                        if !matches!(self.update, UpdateState::Downloading(_)) {
+                            self.update = UpdateState::Available(release);
+                        }
+                    }
+                    Ok(None) => {
+                        if !matches!(self.update, UpdateState::Downloading(_)) {
+                            self.update = UpdateState::UpToDate;
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Update check failed: {e}");
+                        if manual {
+                            self.update = UpdateState::Failed(e);
+                        } else if matches!(self.update, UpdateState::Checking) {
+                            self.update = UpdateState::Idle;
+                        }
+                    }
+                },
+                UpdateMsg::Downloaded(Ok(path)) => match updater::run_setup(&path) {
+                    // The installer replaces DeuClip and starts it again.
+                    Ok(()) => self.quit(),
+                    Err(e) => self.update = UpdateState::Failed(e),
+                },
+                UpdateMsg::Downloaded(Err(e)) => self.update = UpdateState::Failed(e),
             }
         }
         while let Ok(p) = self.picked_rx.try_recv() {
@@ -488,6 +607,84 @@ impl DeuClipApp {
         }
     }
 
+    // ----- Updates -------------------------------------------------------
+
+    fn check_updates_now(&mut self, ctx: &egui::Context) {
+        self.update = UpdateState::Checking;
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("deuclip-update-check".into())
+            .spawn(move || {
+                let result = updater::check();
+                let _ = tx.send(UpdateMsg::Checked { result, manual: true });
+                ctx.request_repaint();
+            });
+        if spawned.is_err() {
+            self.update = UpdateState::Idle;
+        }
+    }
+
+    fn start_update(&mut self, ctx: &egui::Context) {
+        let UpdateState::Available(release) = &self.update else { return };
+        let release = release.clone();
+        let Some(url) = release.setup_url.clone() else {
+            open_url(&release.notes_url);
+            return;
+        };
+        self.update = UpdateState::Downloading(release);
+        let tx = self.update_tx.clone();
+        let ctx = ctx.clone();
+        let spawned = std::thread::Builder::new()
+            .name("deuclip-update-download".into())
+            .spawn(move || {
+                let result = updater::download(&url);
+                let _ = tx.send(UpdateMsg::Downloaded(result));
+                ctx.request_repaint();
+            });
+        if spawned.is_err() {
+            self.update = UpdateState::Failed("Download-Thread nicht startbar.".to_string());
+        }
+    }
+
+    fn update_banner(&mut self, ui: &mut egui::Ui) {
+        let (release, downloading) = match &self.update {
+            UpdateState::Available(r) => (r.clone(), false),
+            UpdateState::Downloading(r) => (r.clone(), true),
+            _ => return,
+        };
+        let ctx = ui.ctx().clone();
+        Frame::new()
+            .fill(theme::CARD)
+            .stroke(Stroke::new(1.0, theme::ACCENT))
+            .corner_radius(CornerRadius::same(8))
+            .inner_margin(Margin::same(14))
+            .show(ui, |ui| {
+                ui.set_width(ui.available_width());
+                ui.label(
+                    RichText::new(format!("Update verfügbar: Version {}", release.version))
+                        .strong()
+                        .color(theme::ACCENT),
+                );
+                ui.label(Self::dim(&format!(
+                    "Installiert: Version {}",
+                    updater::current_version()
+                )));
+                if downloading {
+                    ui.label(Self::dim("Lade und installiere das Update ..."));
+                } else {
+                    ui.horizontal(|ui| {
+                        if theme::primary_button(ui, "Jetzt aktualisieren").clicked() {
+                            self.start_update(&ctx);
+                        }
+                        if ui.button("Was ist neu").clicked() {
+                            open_url(&release.notes_url);
+                        }
+                    });
+                }
+            });
+    }
+
     // ----- Tray and background -------------------------------------------
 
     fn show_window(&self, ctx: &egui::Context) {
@@ -501,7 +698,45 @@ impl DeuClipApp {
             match action {
                 TrayAction::Show => self.show_window(ctx),
                 TrayAction::Quit => self.quit(),
+                TrayAction::SaveClip(slot) => {
+                    self.engine.send(Command::Save {
+                        slot,
+                        duration: self.duration(slot),
+                    });
+                }
+                TrayAction::OpenLast => lastclip::open_last(),
+                TrayAction::OpenFolder => self.open_output_folder(),
+                TrayAction::TogglePause => self.toggle_pause(),
             }
+        }
+        // Keep the menu texts current.
+        let labels = (
+            self.cfg.duration1,
+            self.cfg.duration2,
+            self.rec_state == RecState::Paused,
+        );
+        if labels != self.tray_labels {
+            self.tray_labels = labels;
+            if let Some(tray) = &self.tray {
+                tray.update([labels.0, labels.1], labels.2);
+            }
+        }
+    }
+
+    fn toggle_pause(&mut self) {
+        if self.rec_state == RecState::Paused {
+            self.engine.send(Command::Resume);
+        } else if self.ffmpeg.is_some() {
+            self.engine.send(Command::Pause);
+        }
+    }
+
+    fn open_output_folder(&mut self) {
+        let dir = self.cfg.output_path();
+        if let Err(e) = std::fs::create_dir_all(&dir) {
+            self.info = Some((format!("Ordner nicht anlegbar: {e}"), true));
+        } else if let Err(e) = std::process::Command::new("explorer").arg(&dir).spawn() {
+            self.info = Some((format!("Explorer nicht startbar: {e}"), true));
         }
     }
 
@@ -705,6 +940,11 @@ impl DeuClipApp {
     fn capture_card(&mut self, ui: &mut egui::Ui) -> bool {
         let mut changed = false;
         theme::card(ui, "Aufnahme", |ui| {
+            let paused = self.rec_state == RecState::Paused;
+            let label = if paused { "Aufnahme fortsetzen" } else { "Aufnahme pausieren" };
+            if ui.add_enabled(self.ffmpeg.is_some(), Button::new(label)).clicked() {
+                self.toggle_pause();
+            }
             egui::Grid::new("capture_grid")
                 .num_columns(2)
                 .spacing([14.0, 10.0])
@@ -773,6 +1013,17 @@ impl DeuClipApp {
                     );
                     ui.end_row();
                 });
+            ui.add_space(4.0);
+            let mut system_audio = self.cfg.audio_system;
+            if theme::checkbox(ui, &mut system_audio, "Systemton aufnehmen").changed() {
+                self.cfg.audio_system = system_audio;
+                changed = true;
+            }
+            let mut mic_audio = self.cfg.audio_mic;
+            if theme::checkbox(ui, &mut mic_audio, "Mikrofon aufnehmen").changed() {
+                self.cfg.audio_mic = mic_audio;
+                changed = true;
+            }
             ui.label(Self::dim(
                 "Kleinere Clip-Auflösung spart Speicherplatz und Last. 4K nimmt nur bei einem 4K-Bildschirm in voller Größe auf, es wird nie hochskaliert. Änderungen starten die Aufnahme neu.",
             ));
@@ -855,6 +1106,32 @@ impl DeuClipApp {
                 ui.label(Self::error_text(e));
             }
             ui.add_space(4.0);
+            let mut check = self.cfg.check_updates;
+            if theme::checkbox(ui, &mut check, "Automatisch nach Updates suchen").changed() {
+                self.cfg.check_updates = check;
+                changed = true;
+            }
+            ui.horizontal(|ui| {
+                let busy = matches!(self.update, UpdateState::Checking | UpdateState::Downloading(_));
+                if ui
+                    .add_enabled(!busy, Button::new("Jetzt nach Updates suchen"))
+                    .clicked()
+                {
+                    self.check_updates_now(&ui.ctx().clone());
+                }
+                let status = match &self.update {
+                    UpdateState::Idle => format!("Installiert: Version {}", updater::current_version()),
+                    UpdateState::Checking => "Suche ...".to_string(),
+                    UpdateState::UpToDate => "DeuClip ist aktuell.".to_string(),
+                    UpdateState::Available(r) => format!("Version {} ist verfügbar.", r.version),
+                    UpdateState::Downloading(_) => "Lade Update ...".to_string(),
+                    UpdateState::Failed(e) => e.clone(),
+                };
+                let failed = matches!(self.update, UpdateState::Failed(_));
+                let text = if failed { Self::error_text(&status) } else { Self::dim(&status) };
+                ui.add(Label::new(text).truncate());
+            });
+            ui.add_space(4.0);
             ui.label(Self::dim(
                 "Das Schließen des Fensters lässt DeuClip im Hintergrund weiterlaufen.",
             ));
@@ -882,6 +1159,7 @@ impl DeuClipApp {
                     )
                 }
                 RecState::Starting => (theme::TEXT_DIM, "Aufnahme startet ...".to_string(), false),
+                RecState::Paused => (theme::TEXT_DIM, "Aufnahme pausiert".to_string(), false),
                 RecState::Reconnecting => (
                     theme::TEXT_DIM,
                     "Aufnahme unterbrochen, verbinde neu ...".to_string(),
@@ -912,6 +1190,13 @@ impl DeuClipApp {
                 }
             }
         });
+    }
+}
+
+/// Opens a web page in the default browser.
+fn open_url(url: &str) {
+    if let Err(e) = std::process::Command::new("explorer.exe").arg(url).spawn() {
+        log::warn!("Could not open {url}: {e}");
     }
 }
 
@@ -956,6 +1241,7 @@ impl eframe::App for DeuClipApp {
                         if self.ffmpeg.is_none() {
                             self.ffmpeg_banner(ui);
                         }
+                        self.update_banner(ui);
                         changed |= self.hotkeys_card(ui);
                         changed |= self.capture_card(ui);
                         self.output_card(ui);
