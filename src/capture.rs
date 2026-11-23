@@ -14,6 +14,7 @@ use std::os::windows::process::CommandExt;
 use std::path::{Path, PathBuf};
 use std::process::{Child, ChildStdin, Command as Proc, Stdio};
 use std::sync::mpsc::{channel, Receiver, RecvTimeoutError, Sender};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant, SystemTime};
@@ -556,7 +557,12 @@ struct Recorder {
     dir: PathBuf,
     encoder: String,
     started: Instant,
-    empty_warned: bool,
+    /// Set by the log reader when ddagrab reports that Windows took the screen away
+    /// (DXGI_ERROR_ACCESS_LOST). With an audio input FFmpeg keeps running after that.
+    failed: Arc<AtomicBool>,
+    /// Newest segment number seen and when it last changed: segments must keep coming.
+    last_index: Option<u32>,
+    last_progress: Instant,
     tail: Arc<Mutex<VecDeque<String>>>,
     audio: Vec<AudioHandle>,
 }
@@ -610,8 +616,10 @@ fn spawn_ffmpeg(ffmpeg: &Path, args: &[String], dir: &Path, encoder: &str) -> Re
         .map_err(|e| format!("FFmpeg konnte nicht gestartet werden: {e}"))?;
     let stdin = child.stdin.take();
     let tail: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+    let failed = Arc::new(AtomicBool::new(false));
     if let Some(stderr) = child.stderr.take() {
         let tail = Arc::clone(&tail);
+        let failed = Arc::clone(&failed);
         let label = encoder.to_string();
         let _ = thread::Builder::new()
             .name("deuclip-ffmpeg-log".into())
@@ -622,6 +630,9 @@ fn spawn_ffmpeg(ffmpeg: &Path, args: &[String], dir: &Path, encoder: &str) -> Re
                         continue;
                     }
                     log::warn!("ffmpeg[{label}]: {text}");
+                    if text.contains("AcquireNextFrame failed") || text.contains("Error during demuxing") {
+                        failed.store(true, Ordering::SeqCst);
+                    }
                     if let Ok(mut t) = tail.lock() {
                         if t.len() >= 6 {
                             t.pop_front();
@@ -637,7 +648,9 @@ fn spawn_ffmpeg(ffmpeg: &Path, args: &[String], dir: &Path, encoder: &str) -> Re
         dir: dir.to_path_buf(),
         encoder: encoder.to_string(),
         started: Instant::now(),
-        empty_warned: false,
+        failed,
+        last_index: None,
+        last_progress: Instant::now(),
         tail,
         audio: Vec::new(),
     })
@@ -1150,13 +1163,24 @@ impl Manager {
                     failure = Some(format!("FFmpeg wurde unerwartet beendet ({status}). {tail}"));
                 }
                 Ok(None) => {
-                    if !rec.empty_warned
-                        && rec.started.elapsed() > Duration::from_secs(10)
-                        && all_segments(&rec.dir).is_empty()
-                    {
-                        rec.empty_warned = true;
+                    if rec.failed.load(Ordering::SeqCst) {
                         let tail = rec.tail_text();
-                        failure = Some(format!("FFmpeg liefert keine Daten. {tail}"));
+                        failure = Some(format!(
+                            "Windows hat den Zugriff auf den Bildschirm entzogen. {tail}"
+                        ));
+                    } else {
+                        // A new segment must appear every second, otherwise the capture stalled.
+                        let newest = all_segments(&rec.dir).last().and_then(|p| segment_index(p));
+                        if newest.is_some() && newest != rec.last_index {
+                            rec.last_index = newest;
+                            rec.last_progress = Instant::now();
+                        }
+                        if rec.started.elapsed() > Duration::from_secs(8)
+                            && rec.last_progress.elapsed() > Duration::from_secs(6)
+                        {
+                            let tail = rec.tail_text();
+                            failure = Some(format!("FFmpeg liefert keine neuen Daten mehr. {tail}"));
+                        }
                     }
                 }
                 Err(e) => failure = Some(format!("FFmpeg-Status nicht lesbar: {e}")),
