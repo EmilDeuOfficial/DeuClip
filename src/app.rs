@@ -41,7 +41,7 @@ enum UpdateState {
     Failed(String),
 }
 
-type CaptureKey = (Option<PathBuf>, u32, u32, u32, Quality, bool, bool);
+type CaptureKey = (Option<PathBuf>, u32, u32, u32, Quality, [bool; 3]);
 
 pub struct DeuClipApp {
     cfg: Config,
@@ -365,8 +365,11 @@ impl DeuClipApp {
             self.cfg.fps,
             self.cfg.scale_height,
             self.cfg.quality,
-            self.cfg.audio_system,
-            self.cfg.audio_mic,
+            [
+                self.cfg.audio_system,
+                self.cfg.audio_all_devices,
+                self.cfg.audio_mic,
+            ],
         );
         if self.applied_key.as_ref() != Some(&key) {
             self.applied_key = Some(key);
@@ -396,6 +399,7 @@ impl DeuClipApp {
                     scale_height,
                     quality: self.cfg.quality,
                     audio_system: self.cfg.audio_system,
+                    audio_all_devices: self.cfg.audio_all_devices,
                     audio_mic: self.cfg.audio_mic,
                 }));
             }
@@ -1018,6 +1022,22 @@ impl DeuClipApp {
             if theme::checkbox(ui, &mut system_audio, "Systemton aufnehmen").changed() {
                 self.cfg.audio_system = system_audio;
                 changed = true;
+            }
+            if self.cfg.audio_system {
+                ui.horizontal(|ui| {
+                    ui.add_space(26.0);
+                    let mut all = self.cfg.audio_all_devices;
+                    if theme::checkbox(ui, &mut all, "Alle Ausgabegeräte aufnehmen")
+                        .on_hover_text(
+                            "Aus: nur das Windows-Standardgerät. Reicht ein virtueller Mixer den Ton \
+                             an ein zweites Gerät weiter, ist er mit dieser Option doppelt zu hören.",
+                        )
+                        .changed()
+                    {
+                        self.cfg.audio_all_devices = all;
+                        changed = true;
+                    }
+                });
             }
             let mut mic_audio = self.cfg.audio_mic;
             if theme::checkbox(ui, &mut mic_audio, "Mikrofon aufnehmen").changed() {

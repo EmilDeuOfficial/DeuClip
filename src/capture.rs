@@ -87,6 +87,7 @@ pub struct Settings {
     pub scale_height: u32,
     pub quality: Quality,
     pub audio_system: bool,
+    pub audio_all_devices: bool,
     pub audio_mic: bool,
 }
 
@@ -1100,7 +1101,7 @@ impl Manager {
         }
         let mut handles = Vec::new();
         for source in wanted {
-            match AudioHandle::start(source) {
+            match AudioHandle::start(source, s.audio_all_devices) {
                 Ok(h) => handles.push(h),
                 Err(e) => {
                     log::warn!("Audio source unavailable: {e}");

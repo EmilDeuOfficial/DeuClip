@@ -23,7 +23,7 @@ DeuClip is a lightweight clip tool for Windows. It keeps the last seconds of you
 - Encoder order: `h264_nvenc`, then `h264_qsv`, then `h264_amf`, fallback `libx264` with preset `ultrafast`
 - Rolling buffer of 1-second segments, clips are joined with the concat demuxer without re-encoding (`-c copy`)
 - The buffer only keeps the longest clip length plus 10 seconds in the temp folder (70 seconds with the default 30 s and 60 s), older segments are deleted every 2 seconds and everything is removed on exit, so nothing piles up on the disk when you do not save a clip
-- Records the system sound (everything that plays on the default output device) and optionally the microphone via WASAPI, encoded as AAC into the same segments, so audio needs no extra disk space. The recording follows the Windows default device, for example when you switch between speakers and a headset
+- Records the system sound and optionally the default microphone via WASAPI, encoded as AAC into the same segments, so audio needs no extra disk space. By default all active output devices are recorded and mixed (speakers, headset, virtual devices), new or removed devices are picked up while recording. Turn the option off to record only the Windows default device, for example when a virtual mixer forwards audio to a second device and it is heard twice in the clip
 - Configurable: frame rate, clip resolution from 480p up to 2160p (4K), quality (the high setting uses a high bitrate and adaptive quantization to avoid blocks in dark areas), FFmpeg path
 - Optional short sound when a clip was saved or failed, it is audible in fullscreen games, too
 - Never upscales: 4K records at full size only on a 4K screen

@@ -100,6 +100,8 @@ pub struct Config {
     pub sound: bool,
     /// Record the system sound (everything that plays on the default output device).
     pub audio_system: bool,
+    /// System sound from all active output devices, not only the default one.
+    pub audio_all_devices: bool,
     /// Record the default microphone.
     pub audio_mic: bool,
     /// Look for a newer release on GitHub now and then.
@@ -122,6 +124,7 @@ impl Default for Config {
             ffmpeg_path: String::new(),
             sound: true,
             audio_system: true,
+            audio_all_devices: true,
             audio_mic: false,
             check_updates: true,
         }
