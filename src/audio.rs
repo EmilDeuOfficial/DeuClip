@@ -2,6 +2,10 @@
 //! the default microphone. The raw samples are streamed to FFmpeg over a local TCP connection
 //! (FFmpeg connects to this process), which encodes them into the same segments as the video.
 //!
+//! The capture follows the Windows default device: switching between speakers and a headset
+//! moves the recording to the new device. Windows converts every device to one fixed format,
+//! so FFmpeg does not have to be restarted.
+//!
 //! WASAPI loopback delivers no data while nothing is playing, so the stream is filled with
 //! silence at real-time speed to keep audio and video in sync.
 
@@ -14,9 +18,10 @@ use std::sync::Arc;
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, Instant};
 use windows::Win32::Media::Audio::{
-    eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDeviceEnumerator,
-    MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
-    AUDCLNT_STREAMFLAGS_LOOPBACK, WAVEFORMATEX, WAVEFORMATEXTENSIBLE,
+    eCapture, eConsole, eRender, IAudioCaptureClient, IAudioClient, IMMDevice,
+    IMMDeviceEnumerator, MMDeviceEnumerator, AUDCLNT_BUFFERFLAGS_SILENT, AUDCLNT_SHAREMODE_SHARED,
+    AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM, AUDCLNT_STREAMFLAGS_LOOPBACK,
+    AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY, WAVEFORMATEX,
 };
 use windows::Win32::System::Com::{
     CoCreateInstance, CoInitializeEx, CoTaskMemFree, CLSCTX_ALL, COINIT_MULTITHREADED,
@@ -108,64 +113,60 @@ impl AudioHandle {
     }
 }
 
+/// Sample format every device is converted to: 32 bit float, stereo, 48 kHz.
+const RATE: u32 = 48_000;
+const CHANNELS: u16 = 2;
+const BLOCK_ALIGN: usize = 8;
+
 struct Client {
     audio: IAudioClient,
     capture: IAudioCaptureClient,
-    format: AudioFormat,
-    block_align: usize,
+    /// Windows id of the device that is being recorded.
+    id: String,
 }
 
-unsafe fn open_client(source: Source) -> Result<Client, String> {
+unsafe fn default_device(source: Source) -> Result<IMMDevice, String> {
     let enumerator: IMMDeviceEnumerator = CoCreateInstance(&MMDeviceEnumerator, None, CLSCTX_ALL)
         .map_err(|e| format!("Audio-Dienst nicht verfügbar: {e}"))?;
     let flow = if source == Source::System { eRender } else { eCapture };
-    let device = enumerator
+    enumerator
         .GetDefaultAudioEndpoint(flow, eConsole)
-        .map_err(|e| format!("{}: kein Standardgerät gefunden ({e})", source.name()))?;
+        .map_err(|e| format!("{}: kein Standardgerät gefunden ({e})", source.name()))
+}
+
+unsafe fn device_id(device: &IMMDevice) -> Option<String> {
+    let raw = device.GetId().ok()?;
+    let id = raw.to_string().ok();
+    CoTaskMemFree(Some(raw.0 as *const _));
+    id
+}
+
+unsafe fn open_client(source: Source) -> Result<Client, String> {
+    let device = default_device(source)?;
+    let id = device_id(&device).unwrap_or_default();
     let audio: IAudioClient = device
         .Activate(CLSCTX_ALL, None)
         .map_err(|e| format!("{}: Gerät nicht nutzbar ({e})", source.name()))?;
-    let pfmt = audio
-        .GetMixFormat()
-        .map_err(|e| format!("{}: Format nicht lesbar ({e})", source.name()))?;
-    let fmt: WAVEFORMATEX = std::ptr::read_unaligned(pfmt);
-    let (tag, bits, channels, rate, align) = (
-        fmt.wFormatTag,
-        fmt.wBitsPerSample,
-        fmt.nChannels,
-        fmt.nSamplesPerSec,
-        fmt.nBlockAlign as usize,
-    );
-    let is_float = tag == 3
-        || (tag == 0xFFFE && {
-            let ext: WAVEFORMATEXTENSIBLE = std::ptr::read_unaligned(pfmt as *const WAVEFORMATEXTENSIBLE);
-            ext.SubFormat.data1 == 3
-        });
-    let ffmpeg = match (is_float, bits) {
-        (true, 32) => "f32le",
-        (false, 16) => "s16le",
-        (false, 32) => "s32le",
-        _ => {
-            CoTaskMemFree(Some(pfmt as *const _));
-            return Err(format!(
-                "{}: Format wird nicht unterstützt ({bits} Bit)",
-                source.name()
-            ));
-        }
+    let format = WAVEFORMATEX {
+        wFormatTag: 3, // IEEE float
+        nChannels: CHANNELS,
+        nSamplesPerSec: RATE,
+        nAvgBytesPerSec: RATE * BLOCK_ALIGN as u32,
+        nBlockAlign: BLOCK_ALIGN as u16,
+        wBitsPerSample: 32,
+        cbSize: 0,
     };
-    let flags = if source == Source::System { AUDCLNT_STREAMFLAGS_LOOPBACK } else { 0 };
-    let init = audio.Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 10_000_000, 0, pfmt, None);
-    CoTaskMemFree(Some(pfmt as *const _));
-    init.map_err(|e| format!("{}: Zugriff nicht möglich ({e})", source.name()))?;
+    let mut flags = AUDCLNT_STREAMFLAGS_AUTOCONVERTPCM | AUDCLNT_STREAMFLAGS_SRC_DEFAULT_QUALITY;
+    if source == Source::System {
+        flags |= AUDCLNT_STREAMFLAGS_LOOPBACK;
+    }
+    audio
+        .Initialize(AUDCLNT_SHAREMODE_SHARED, flags, 10_000_000, 0, &format, None)
+        .map_err(|e| format!("{}: Zugriff nicht möglich ({e})", source.name()))?;
     let capture: IAudioCaptureClient = audio
         .GetService()
         .map_err(|e| format!("{}: Aufnahme nicht startbar ({e})", source.name()))?;
-    Ok(Client {
-        audio,
-        capture,
-        format: AudioFormat { ffmpeg, rate, channels },
-        block_align: align,
-    })
+    Ok(Client { audio, capture, id })
 }
 
 /// Appends all packets that are ready. Returns the number of frames.
@@ -180,7 +181,7 @@ unsafe fn read_packets(client: &Client, out: &mut Vec<u8>) -> windows::core::Res
         let mut frames = 0u32;
         let mut flags = 0u32;
         client.capture.GetBuffer(&mut data, &mut frames, &mut flags, None, None)?;
-        let bytes = frames as usize * client.block_align;
+        let bytes = frames as usize * BLOCK_ALIGN;
         if data.is_null() || flags & AUDCLNT_BUFFERFLAGS_SILENT.0 as u32 != 0 {
             out.resize(out.len() + bytes, 0);
         } else {
@@ -215,7 +216,12 @@ fn run(
             }
         };
         let port = listener.local_addr().map(|a| a.port()).unwrap_or(0);
-        let _ = ready_tx.send(Ok((client.format.clone(), port)));
+        let format = AudioFormat {
+            ffmpeg: "f32le",
+            rate: RATE,
+            channels: CHANNELS,
+        };
+        let _ = ready_tx.send(Ok((format, port)));
 
         // Wait until FFmpeg is running.
         let _first_segment = loop {
@@ -255,16 +261,46 @@ fn run(
         }
 
         let mut scratch: Vec<u8> = Vec::new();
-
-        let rate = client.format.rate as f64;
-        let mut last = Instant::now();
+        let rate = RATE as f64;
+        let started = Instant::now();
+        // Frames sent so far: silence is only added when the stream falls behind real time.
+        let mut sent: u64 = 0;
         let mut device_ok = true;
-        let mut retry_at = Instant::now();
+        let mut check_at = Instant::now() + Duration::from_secs(1);
+        let mut failure_logged = false;
+        // Only for testing: reopen the device on every check.
+        let reopen_always = std::env::var_os("DEUCLIP_TEST_AUDIO_REOPEN").is_some();
         while !stop.load(Ordering::SeqCst) {
             thread::sleep(Duration::from_millis(10));
             let now = Instant::now();
-            let elapsed = now.duration_since(last);
-            last = now;
+
+            // Follow the Windows default device and recover from a lost one.
+            if now >= check_at {
+                check_at = now + Duration::from_secs(1);
+                let current = default_device(source).ok().and_then(|d| device_id(&d));
+                let changed = current.map(|id| id != client.id).unwrap_or(false);
+                if changed || !device_ok || reopen_always {
+                    let opened = open_client(source).and_then(|c| {
+                        c.audio.Start().map_err(|e| format!("Start fehlgeschlagen: {e}"))?;
+                        Ok(c)
+                    });
+                    match opened {
+                        Ok(c) => {
+                            let _ = client.audio.Stop();
+                            client = c;
+                            device_ok = true;
+                            failure_logged = false;
+                            log::info!("{}: recording the current default device", source.name());
+                        }
+                        Err(e) => {
+                            if !failure_logged {
+                                failure_logged = true;
+                                log::warn!("{}: new device not usable yet: {e}", source.name());
+                            }
+                        }
+                    }
+                }
+            }
 
             scratch.clear();
             let mut got = 0usize;
@@ -272,37 +308,26 @@ fn run(
                 match read_packets(&client, &mut scratch) {
                     Ok(n) => got = n,
                     Err(e) => {
-                        log::warn!("{}: Gerät verloren: {e}", source.name());
+                        log::warn!("{}: device lost: {e}", source.name());
                         device_ok = false;
-                        retry_at = now + Duration::from_secs(2);
                         scratch.clear();
                     }
-                }
-            } else if now >= retry_at {
-                // E.g. the default output device was switched: try the new one.
-                match open_client(source) {
-                    Ok(c) if c.format == client.format => {
-                        if c.audio.Start().is_ok() {
-                            let _ = client.audio.Stop();
-                            client = c;
-                            device_ok = true;
-                            log::info!("{}: neues Gerät übernommen", source.name());
-                        }
-                    }
-                    Ok(_) => {
-                        log::warn!("{}: neues Gerät hat ein anderes Format, es bleibt still", source.name());
-                        retry_at = now + Duration::from_secs(10);
-                    }
-                    Err(_) => retry_at = now + Duration::from_secs(5),
                 }
             }
             if got == 0 {
                 // Nothing playing (or no device): silence keeps the timeline running.
-                let frames = (elapsed.as_secs_f64() * rate) as usize;
-                scratch.resize(frames * client.block_align, 0);
+                let expected = (started.elapsed().as_secs_f64() * rate) as u64;
+                let behind = expected.saturating_sub(sent);
+                if behind > (RATE / 10) as u64 {
+                    let frames = behind - (RATE / 50) as u64;
+                    scratch.resize(frames as usize * BLOCK_ALIGN, 0);
+                }
             }
-            if !scratch.is_empty() && stream.write_all(&scratch).is_err() {
-                break;
+            if !scratch.is_empty() {
+                if stream.write_all(&scratch).is_err() {
+                    break;
+                }
+                sent += (scratch.len() / BLOCK_ALIGN) as u64;
             }
         }
         let _ = client.audio.Stop();
